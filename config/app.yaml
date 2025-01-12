@@ -1,0 +1,44 @@
+app:
+  models:
+    embedding:
+      type: "huggingface"
+      model: "BAAI/bge-large-en-v1.5"
+    llm:
+#      type: "huggingface"
+#      model: "meta-llama/Llama-2-13b-chat-hf"
+#      type: "sparkllm"
+#      type: "ollama"
+#      model: "qwen2.5"
+      type: "gemini"
+      model: "gemini-2.0-flash-exp"
+#      type: anthropic
+#      model: claude-3-sonnet-20240229
+    chatllm:
+#      type: "sparkllm"
+#      type: "qwen"
+#      model: "qwen2.5"
+      type: "gemini"
+      model: "gemini-2.0-flash-exp"
+#      type: "ollama"
+#      model: "llama3.1"
+    rerank:
+      type: "bge"
+      model: "BAAI/bge-reranker-large"
+  embedding:
+    input_path: "./data/input"
+    staging_path: "./data/staging"
+    archive_path: "./data/archive"
+    trunk_size: 2048
+    overlap: 256
+    confluence:
+      url: https://akjamie.atlassian.net/
+  proxy:
+    enabled: true
+    no_proxy: "localhost,127.0.0.1"
+    http_proxy: "http://127.0.0.1:7890"
+    https_proxy: "http://127.0.0.1:7890"
+  logging.level:
+    root: "DEBUG"  # default for all packages including project and libraries
+    utils.lock: "WARNING"
+    langchain: "WARNING"
+    httpx: "WARNING"
