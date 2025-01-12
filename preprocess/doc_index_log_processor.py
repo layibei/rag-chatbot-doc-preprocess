@@ -3,13 +3,11 @@ from datetime import datetime, UTC
 from typing import Optional, List
 
 from langchain_postgres import PGVector
-from langchain_redis import RedisVectorStore
 from pydantic import BaseModel
-from sqlalchemy import text
 
 from config.common_settings import CommonConfig
 from preprocess.index_log import Status, IndexLog, SourceType
-from preprocess.vector_store_helper import VectorStoreHelper
+from preprocess.store.vector_store_helper import VectorStoreHelper
 from utils.logging_util import logger
 
 
@@ -20,11 +18,13 @@ class DocumentChunk(BaseModel):
     source: str
     source_type: str
 
+
 class ChunkListResponse(BaseModel):
     chunks: List[DocumentChunk]
     total: int
     page: int
     page_size: int
+
 
 class DocEmbeddingsProcessor:
     def __init__(self, embedding_model, vector_store, index_log_helper, config: CommonConfig):
@@ -34,17 +34,6 @@ class DocEmbeddingsProcessor:
         self.index_log_helper = index_log_helper
         self.config = config
         self.vector_store_helper = VectorStoreHelper(vector_store)
-
-    def _get_source_type(self, extension: str) -> Optional[str]:
-        """Map file extension to source type"""
-        extension_mapping = {
-            'pdf': 'pdf',
-            'txt': 'text',
-            'csv': 'csv',
-            'json': 'json',
-            'docx': 'docx'
-        }
-        return extension_mapping.get(extension.lower())
 
     def add_index_log(self, source: str, source_type: str, user_id: str) -> dict:
         """Add a new document to the index log or update existing one"""
@@ -84,7 +73,7 @@ class DocEmbeddingsProcessor:
             existing_log = self.index_log_helper.find_by_source(source, source_type)
             if existing_log:
                 # Content changed, update existing log
-                self._remove_existing_embeddings(source, source_type,existing_log.checksum)
+                self.vector_store_helper.remove_existing_embeddings(source, source_type, existing_log.checksum)
                 existing_log.checksum = checksum
                 existing_log.status = Status.PENDING
                 existing_log.modified_at = datetime.now(UTC)
@@ -125,23 +114,13 @@ class DocEmbeddingsProcessor:
             self.logger.error(f"Error calculating checksum for {source}: {str(e)}")
             raise
 
-    def _remove_existing_embeddings(self, source: str, source_type: str, checksum: str):
-        """Remove existing document embeddings from vector store
-
-        Args:
-            source (str): The identifier of the document source
-            source_type (str): The type of the document source
-            checksum (str): The checksum of the document, used to uniquely identify the document
-        """
-        self.vector_store_helper.remove_existing_embeddings(source, source_type, checksum)
-
-
     def get_document_by_id(self, log_id) -> IndexLog:
         """Get document by ID"""
         log = self.index_log_helper.find_by_id(log_id)
         self.logger.info(f"Found document with id {log_id}: {log}")
         return log
 
+    @DeprecationWarning
     def get_document_chunks(self, log_id: str, page: int = 1, page_size: int = 10) -> ChunkListResponse:
         """
         Retrieve embedded chunks for a document with pagination, ordered by page number
@@ -164,12 +143,12 @@ class DocEmbeddingsProcessor:
             "source_type": doc.source_type,
             "checksum": doc.checksum
         }
-        
+
         # Add order_by parameter for metadata.page
         order_by = [("metadata.page", "asc")]
-        
+
         self.logger.info(f"Searching for chunks with filter: {filter_dict}")
-        
+
         # Get all matching documents to count total
         all_docs = self.vector_store.similarity_search(
             query="",  # Empty query to get all documents
@@ -178,7 +157,7 @@ class DocEmbeddingsProcessor:
             order_by=order_by  # Add ordering
         )
         total = len(all_docs)
-        
+
         # Get paginated results
         docs = self.vector_store.similarity_search(
             query="",  # Empty query to get all documents

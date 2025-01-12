@@ -1,32 +1,35 @@
-import json
-import traceback
-
-import dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, UTC, timedelta
-
-from config.database.database_manager import DatabaseManager
-from preprocess.index_log.index_log_helper import IndexLogHelper
-from preprocess.index_log.repositories import IndexLogRepository
-from utils.lock.distributed_lock_helper import DistributedLockHelper
-from preprocess.index_log import Status, SourceType
-from preprocess.loader.loader_factories import DocumentLoaderFactory
-from utils.lock.repositories import DistributedLockRepository
-from utils.logging_util import logger
 import hashlib
+import json
 import os
 import shutil
+import traceback
+from datetime import datetime, UTC, timedelta
 from pathlib import Path
-from config.common_settings import CommonConfig
 from typing import Optional
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from config.common_settings import CommonConfig
+from preprocess.index_log import Status, SourceType
+from preprocess.index_log.index_log_helper import IndexLogHelper
+from preprocess.index_log.repositories import IndexLogRepository
+from preprocess.loader.loader_factories import DocumentLoaderFactory
+from preprocess.store.graph_store_helper import GraphStoreHelper
+from preprocess.store.vector_store_helper import VectorStoreHelper
+from utils.lock.distributed_lock_helper import DistributedLockHelper
+from utils.lock.repositories import DistributedLockRepository
+from utils.logging_util import logger
 
 
 class DocEmbeddingJob:
     def __init__(self):
+        self.graph_store_helper = None
+        self.vector_store_helper = None
         self.logger = logger
         self.config = CommonConfig()
         self.embeddings = None
         self.vector_store = None
+        self.graph_store = None
         self.index_log_helper = None
         self.distributed_lock_helper = None
         self.scheduler = None
@@ -36,6 +39,13 @@ class DocEmbeddingJob:
         try:
             self.embeddings = self.config.get_model("embedding")
             self.vector_store = self.config.get_vector_store()
+            self.vector_store_helper = VectorStoreHelper(self.vector_store)
+
+            # Initialize graph store
+            if self.config.get_embedding_config("graph_store.enabled", False):
+                self.logger.info("Graph store is enabled")
+                self.graph_store = self.config.get_graph_store()
+                self.graph_store_helper = GraphStoreHelper(self.config.get_graph_store())
 
             index_log_repo = IndexLogRepository(self.config.get_db_manager())
             self.index_log_helper = IndexLogHelper(index_log_repo)
@@ -48,7 +58,7 @@ class DocEmbeddingJob:
             self.logger.info("DocEmbeddingJob initialized successfully")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to initialize DocEmbeddingJob: {str(e)}")
+            self.logger.error(f"Failed to initialize DocEmbeddingJob: {str(e)}, stack:{traceback.format_exc()}")
             return False
 
     def setup_scheduler(self):
@@ -261,7 +271,7 @@ class DocEmbeddingJob:
         existing_log = self.index_log_helper.find_by_source(source, source_type)
         if existing_log:
             # Content changed, update existing log
-            self._remove_existing_embeddings(source, source_type, existing_log.checksum)
+            self.vector_store_helper.remove_existing_embeddings(source, source_type, existing_log.checksum)
             existing_log.checksum = checksum
             existing_log.status = Status.PENDING
             existing_log.modified_at = datetime.now(UTC)
@@ -298,16 +308,6 @@ class DocEmbeddingJob:
             self.logger.error(f"Error calculating checksum for {source}: {str(e)}")
             raise
 
-    def _remove_existing_embeddings(self, source: str, source_type: str, checksum: str):
-        """Remove existing document embeddings from vector store"""
-        docs = self.vector_store.search_by_metadata({
-            "source": source,
-            "source_type": source_type,
-            "checksum": checksum
-        })
-        if docs:
-            self.vector_store.delete([doc.metadata["id"] for doc in docs])
-
     def _get_source_type(self, extension: str) -> Optional[str]:
         """Map file extension to source type"""
         extension_mapping = {
@@ -336,7 +336,7 @@ class DocEmbeddingJob:
 
             # Initialize archive_file as None
             archive_file = None
-            
+
             # calc archive path for file-based documents
             if not (log.source_type == SourceType.WEB_PAGE.value or log.source_type == SourceType.CONFLUENCE.value):
                 archive_path = self.config.get_embedding_config()["archive_path"]
@@ -354,6 +354,23 @@ class DocEmbeddingJob:
 
             # Save to vector store
             self.vector_store.add_documents(documents)
+
+            # Save to graph store
+            if self.graph_store:
+                try:
+                    self.graph_store.add_document(
+                        doc_id=log.id,
+                        metadata={
+                            "source": archive_file if archive_file is not None else log.source,
+                            "source_type": log.source_type,
+                            "checksum": log.checksum
+                        },
+                        chunks=documents
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error saving to graph store: {str(e)}")
+                    # Don't fail the whole process if graph store fails
+                    # Just log the error and continue
 
             # Clear error message on success
             log.error_message = None

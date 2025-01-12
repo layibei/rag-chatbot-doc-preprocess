@@ -285,6 +285,7 @@ def delete_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@DeprecationWarning
 @router.get("/docs/{log_id}/chunks", response_model=ChunkListResponse)
 def get_document_chunks(
     log_id: str,
