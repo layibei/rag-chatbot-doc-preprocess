@@ -37,7 +37,7 @@ class ConfluenceLoader(DocumentLoader):
             # Combine and enhance content
             enhanced_docs = self._enhance_content(view_docs, storage_docs)
             self.logger.info(
-                f"Enhanced content: {enhanced_docs}, view doc count:{len(view_docs)}, storage doc count:{len(storage_docs)}")
+                f"Enhanced content: {len(enhanced_docs)}, view doc count:{len(view_docs)}, storage doc count:{len(storage_docs)}")
 
             # Split documents while preserving structure
             splitter = self.get_splitter(enhanced_docs)

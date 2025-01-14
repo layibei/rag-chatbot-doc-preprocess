@@ -19,6 +19,7 @@ from preprocess.store.vector_store_helper import VectorStoreHelper
 from utils.lock.distributed_lock_helper import DistributedLockHelper
 from utils.lock.repositories import DistributedLockRepository
 from utils.logging_util import logger
+from preprocess.store.hybrid_retriever import HybridRetriever
 
 
 class DocEmbeddingJob:
@@ -33,26 +34,30 @@ class DocEmbeddingJob:
         self.index_log_helper = None
         self.distributed_lock_helper = None
         self.scheduler = None
+        self.retriever = None
+
+        self.embeddings = self.config.get_model("embedding")
+        self.vector_store = self.config.get_vector_store()
+        self.vector_store_helper = VectorStoreHelper(self.vector_store)
+
+        # Initialize graph store
+        if self.config.get_embedding_config("graph_store.enabled", False):
+            self.logger.info("Graph store is enabled")
+            self.graph_store = self.config.get_graph_store()
+            self.graph_store_helper = GraphStoreHelper(self.graph_store)
+        else:
+            # Use only vector store retriever
+            self.retriever = self.vector_store
+
+        index_log_repo = IndexLogRepository(self.config.get_db_manager())
+        self.index_log_helper = IndexLogHelper(index_log_repo)
+        self.distributed_lock_helper = DistributedLockHelper(
+            DistributedLockRepository(self.config.get_db_manager())
+        )
 
     async def initialize(self):
         """Async initialization of components"""
         try:
-            self.embeddings = self.config.get_model("embedding")
-            self.vector_store = self.config.get_vector_store()
-            self.vector_store_helper = VectorStoreHelper(self.vector_store)
-
-            # Initialize graph store
-            if self.config.get_embedding_config("graph_store.enabled", False):
-                self.logger.info("Graph store is enabled")
-                self.graph_store = self.config.get_graph_store()
-                self.graph_store_helper = GraphStoreHelper(self.config.get_graph_store())
-
-            index_log_repo = IndexLogRepository(self.config.get_db_manager())
-            self.index_log_helper = IndexLogHelper(index_log_repo)
-            self.distributed_lock_helper = DistributedLockHelper(
-                DistributedLockRepository(self.config.get_db_manager())
-            )
-
             self.scheduler = BackgroundScheduler()
             self.setup_scheduler()
             self.logger.info("DocEmbeddingJob initialized successfully")
@@ -106,7 +111,7 @@ class DocEmbeddingJob:
             self.logger.info(f"Found {len(logs)} pending documents")
 
             for log in logs:
-                self.logger.info(f"Processing document: {log.source_type}:{log.source}")
+                self.logger.info(f"Processing a document: {log.source_type}:{log.source}")
                 try:
                     # Update status to IN_PROGRESS
                     log.status = Status.IN_PROGRESS
@@ -135,7 +140,7 @@ class DocEmbeddingJob:
                     log.modified_at = datetime.now(UTC)
                     log.error_message = None
                     self.index_log_helper.save(log)
-                    self.logger.info(f"Document processed: {log.source}")
+                    self.logger.info(f"Document processed: {log.source_type}:{log.source}")
                 except Exception as e:
                     log.status = Status.FAILED
                     log.retry_count = (log.retry_count or 0) + 1
@@ -355,10 +360,11 @@ class DocEmbeddingJob:
             # Save to vector store
             self.vector_store.add_documents(documents)
 
-            # Save to graph store
-            if self.graph_store:
+            # Save to graph store if enabled and available
+            if self.graph_store and self.graph_store_helper:
+                self.logger.info(f"Saving to graph store: {log.source_type}:{log.source}")
                 try:
-                    self.graph_store.add_document(
+                    self.graph_store_helper.add_document(
                         doc_id=log.id,
                         metadata={
                             "source": archive_file if archive_file is not None else log.source,
@@ -367,10 +373,13 @@ class DocEmbeddingJob:
                         },
                         chunks=documents
                     )
+                    self.logger.info(f"Successfully saved to graph store: {log.source_type}:{log.source}")
                 except Exception as e:
                     self.logger.error(f"Error saving to graph store: {str(e)}")
                     # Don't fail the whole process if graph store fails
                     # Just log the error and continue
+            else:
+                self.logger.info("Graph store is disabled or not available")
 
             # Clear error message on success
             log.error_message = None

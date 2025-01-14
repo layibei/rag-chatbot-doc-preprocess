@@ -304,16 +304,33 @@ class CommonConfig:
     def get_graph_store(self) -> GraphDatabase:
         """Get Neo4j graph store"""
         try:
-            if not self.config["app"].get("graph_store", {}).get("enabled", False):
+            if not self.config["app"]["embedding"]["graph_store"].get("enabled", False):
+                self.logger.info("Graph store is disabled")
                 return None
 
-            return GraphDatabase.driver(
-                uri=os.environ.get("NEO4J_URI"),
-                auth=(os.environ.get("NEO4J_USERNAME"),
-                      os.environ.get("NEO4J_PASSWORD"))
-            )
+            uri = os.environ.get("NEO4J_URI")
+            username = os.environ.get("NEO4J_USERNAME")
+            password = os.environ.get("NEO4J_PASSWORD")
+
+            if not all([uri, username, password]):
+                self.logger.error("Missing Neo4j credentials in environment variables")
+                return None
+
+            driver = GraphDatabase.driver(uri, auth=(username, password))
+            
+            # Test the connection
+            try:
+                driver.verify_connectivity()
+                self.logger.info("Successfully connected to Neo4j")
+                return driver
+            except Exception as e:
+                self.logger.error(f"Failed to connect to Neo4j: {str(e)}")
+                if driver:
+                    driver.close()
+                return None
+
         except Exception as e:
-            self.logger.error(f"Failed to get graph store: {str(e)}")
+            self.logger.error(f"Failed to initialize graph store: {str(e)}")
             return None
 
 
@@ -328,7 +345,6 @@ if __name__ == "__main__":
     # llm = config.get_model("chatllm")
     # logger.info(llm.invoke("What is the capital of France?"))
 
-    web_search_enabled = config.get_query_config("search.web_search_enabled")
-    print(web_search_enabled)
+    print(config.get_embedding_config("graph_store.enabled"))
 
     print(config.get_logging_config("utils.lock"))

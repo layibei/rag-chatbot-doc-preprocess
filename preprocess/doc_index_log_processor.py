@@ -186,3 +186,8 @@ class DocEmbeddingsProcessor:
             page=page,
             page_size=page_size
         )
+
+    def remove_existing_embeddings(self, source: str, source_type: str, checksum: str) -> None:
+        """Remove existing embeddings for a document"""
+        self.logger.info(f"Removing existing embeddings for document with source: {source}, source_type: {source_type}, checksum: {checksum}")
+        self.vector_store_helper.remove_existing_embeddings(source, source_type, checksum)
