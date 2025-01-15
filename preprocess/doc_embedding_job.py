@@ -19,7 +19,6 @@ from preprocess.store.vector_store_helper import VectorStoreHelper
 from utils.lock.distributed_lock_helper import DistributedLockHelper
 from utils.lock.repositories import DistributedLockRepository
 from utils.logging_util import logger
-from preprocess.store.hybrid_retriever import HybridRetriever
 
 
 class DocEmbeddingJob:
@@ -44,7 +43,7 @@ class DocEmbeddingJob:
         if self.config.get_embedding_config("graph_store.enabled", False):
             self.logger.info("Graph store is enabled")
             self.graph_store = self.config.get_graph_store()
-            self.graph_store_helper = GraphStoreHelper(self.graph_store)
+            self.graph_store_helper = GraphStoreHelper(self.graph_store, self.config)
         else:
             # Use only vector store retriever
             self.retriever = self.vector_store
@@ -378,6 +377,7 @@ class DocEmbeddingJob:
                     self.logger.error(f"Error saving to graph store: {str(e)}")
                     # Don't fail the whole process if graph store fails
                     # Just log the error and continue
+                    raise e
             else:
                 self.logger.info("Graph store is disabled or not available")
 

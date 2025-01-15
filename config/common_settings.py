@@ -3,6 +3,7 @@ from functools import lru_cache
 from typing import Any, Dict, Union
 
 import dotenv
+import spacy
 import yaml
 from langchain_anthropic import ChatAnthropic, AnthropicLLM
 from langchain_community.llms.sparkllm import SparkLLM
@@ -14,6 +15,8 @@ from langchain_postgres import PGVector
 from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisConfig, RedisVectorStore
 from neo4j import GraphDatabase
+from spacy import Language
+from spacy.vectors import Path
 
 from config.database.database_manager import DatabaseManager
 from utils.logger_init import logger
@@ -195,7 +198,15 @@ class CommonConfig:
             )
         else:
             raise RuntimeError("Not found the vector store type")
-
+    def get_nlp_spacy(self) -> Language:
+        """Get NLP model"""
+        # Load spaCy model from local path
+        model_path = Path(os.path.join(BASE_DIR, "../models/spacy/en_core_web_md"))
+        if not model_path.exists():
+            raise RuntimeError(
+                "spaCy model not found. Please run scripts/download_spacy_model.py first"
+            )
+        return spacy.load(str(model_path))
     def setup_proxy(self):
         """Setup proxy configuration"""
         try:

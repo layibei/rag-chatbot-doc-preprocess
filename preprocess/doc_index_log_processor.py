@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from config.common_settings import CommonConfig
 from preprocess.index_log import Status, IndexLog, SourceType
+from preprocess.store.graph_store_helper import GraphStoreHelper
 from preprocess.store.vector_store_helper import VectorStoreHelper
 from utils.logging_util import logger
 
@@ -34,6 +35,8 @@ class DocEmbeddingsProcessor:
         self.index_log_helper = index_log_helper
         self.config = config
         self.vector_store_helper = VectorStoreHelper(vector_store)
+        if self.config.get_embedding_config("graph_store.enabled", False):
+            self.graph_store_helper = GraphStoreHelper(self.config.get_graph_store(), self.config)
 
     def add_index_log(self, source: str, source_type: str, user_id: str) -> dict:
         """Add a new document to the index log or update existing one"""
@@ -187,7 +190,8 @@ class DocEmbeddingsProcessor:
             page_size=page_size
         )
 
-    def remove_existing_embeddings(self, source: str, source_type: str, checksum: str) -> None:
+    def remove_existing_embeddings(self, index_log: IndexLog) -> None:
         """Remove existing embeddings for a document"""
-        self.logger.info(f"Removing existing embeddings for document with source: {source}, source_type: {source_type}, checksum: {checksum}")
-        self.vector_store_helper.remove_existing_embeddings(source, source_type, checksum)
+        self.logger.info(f"Removing existing embeddings for document with source: {index_log.source}, source_type: {index_log.source_type}, checksum: {index_log.checksum}")
+        self.vector_store_helper.remove_existing_embeddings(index_log.source, index_log.source_type, index_log.checksum)
+        self.graph_store_helper.remove_document(index_log.id)
