@@ -26,69 +26,132 @@ class GraphStoreHelper:
         self.nlp = self.config.get_nlp_spacy()
 
     def find_related_chunks(self, query: str, k: int = 3) -> List[Document]:
-        """Find related chunks using graph traversal with versioning support"""
+        """Enhanced graph search with fuzzy matching and scoring"""
         try:
             entities = self._extract_entities(query)
+            if not entities:
+                self.logger.warning(f"No entities extracted from query: {query}")
+                return []
+
+            # Debug logging for extracted entities
+            self.logger.debug(f"Using entities for search: {entities}")
 
             with self.driver.session() as session:
-                # Enhanced query to consider only the latest document versions
                 result = session.run("""
+                    // Match entities with fuzzy matching
                     MATCH (e:Entity)
-                    WHERE e.name IN $entity_names
-                    MATCH (e)<-[:MENTIONS]-(c:Chunk)<-[:HAS_CHUNK]-(d:Document)
-                    WHERE NOT EXISTS((d)<-[:REPLACES]-())  // Only latest versions
-                    WITH c, d, count(DISTINCT e) as relevance,
-                         collect(DISTINCT e.name) as matched_entities
-                    ORDER BY relevance DESC
-                    LIMIT $k
-                    RETURN c.content as content,
-                           d.doc_id as doc_id,
-                           d.source as source,
-                           d.source_type as source_type,
-                           d.checksum as checksum,
-                           matched_entities,
-                           relevance
-                """,
-                                     entity_names=[e["text"] for e in entities],
-                                     k=k
-                                     )
+                    WHERE any(entity IN $entities WHERE 
+                        e.normalized_name CONTAINS entity.normalized_text OR
+                        entity.normalized_text CONTAINS e.normalized_name OR
+                        e.name = entity.text)
 
-                # Convert to LangChain Documents
-                return [
-                    Document(
-                        page_content=record["content"],
-                        metadata={
-                            "doc_id": record["doc_id"],
-                            "source": record["source"],
-                            "source_type": record["source_type"],
-                            "checksum": record["checksum"],
-                            "matched_entities": record["matched_entities"],
-                            "graph_relevance_score": record["relevance"],
-                            "retrieval_type": "graph"
-                        }
-                    ) for record in result
-                ]
+                    // Find connected chunks and documents
+                    MATCH (e)<-[m:MENTIONS]-(c:Chunk)<-[:HAS_CHUNK]-(d:Document)
+                    WHERE NOT EXISTS((d)<-[:REPLACES]-())
+
+                    // Calculate relevance score
+                    WITH c, d, e, m,
+                         sum(CASE 
+                             WHEN e.name IN $exact_names THEN 2 * m.count
+                             ELSE m.count 
+                         END) as relevance_score,
+                         collect(DISTINCT {
+                             name: e.name,
+                             type: e.type,
+                             context: m.context
+                         }) as entity_matches
+
+                    // Aggregate and sort results
+                    WITH c, d, 
+                         relevance_score,
+                         entity_matches,
+                         size(entity_matches) as match_count
+                    ORDER BY relevance_score DESC, match_count DESC
+                    LIMIT $k
+
+                    RETURN 
+                        c.content as content,
+                        d.doc_id as doc_id,
+                        d.source as source,
+                        d.source_type as source_type,
+                        relevance_score as graph_score,
+                        entity_matches
+                """, {
+                    "entities": [{
+                        "text": e["text"],
+                        "normalized_text": e["normalized_text"]
+                    } for e in entities],
+                    "exact_names": [e["text"] for e in entities],
+                    "k": k
+                })
+
+                documents = [Document(
+                    page_content=record["content"],
+                    metadata={
+                        "doc_id": record["doc_id"],
+                        "source": record["source"],
+                        "source_type": record["source_type"],
+                        "graph_score": record["graph_score"],
+                        "entity_matches": record["entity_matches"],
+                        "retrieval_type": "graph"
+                    }
+                ) for record in result]
+
+                # Debug logging for results
+                self.logger.debug(f"Found {len(documents)} documents through graph search")
+                return documents
 
         except Exception as e:
-            self.logger.error(f"Error finding related chunks: {str(e)}, stack: {traceback.format_exc()}")
+            self.logger.error(f"Graph search error: {str(e)}, stack: {traceback.format_exc()}")
             return []
 
     def _extract_entities(self, text: str) -> List[Dict]:
-        """Extract entities using spaCy"""
+        """Enhanced entity extraction with fallbacks"""
         try:
+            entities = []
+            # Primary: Use spaCy for named entity recognition
             doc = self.nlp(text)
-            entities = [{"text": ent.text, "label": ent.label_}
-                        for ent in doc.ents]
 
-            # Add noun phrases as potential entities
-            noun_phrases = [{"text": np.text, "label": "NOUN_PHRASE"}
-                            for np in doc.noun_chunks
-                            if len(np.text.split()) > 1]  # Only multi-word phrases
+            # Process named entities
+            for ent in doc.ents:
+                entities.append({
+                    "text": ent.text,
+                    "normalized_text": ent.text.lower().strip(),
+                    "label": ent.label_,
+                    "start": ent.start_char,
+                    "end": ent.end_char
+                })
 
-            return entities + noun_phrases
+            # Add noun phrases as entities
+            for np in doc.noun_chunks:
+                if len(np.text.split()) > 1:  # Only multi-word phrases
+                    entities.append({
+                        "text": np.text,
+                        "normalized_text": np.text.lower().strip(),
+                        "label": "NOUN_PHRASE",
+                        "start": np.start_char,
+                        "end": np.end_char
+                    })
+
+            # Fallback: Extract keywords if no entities found
+            if not entities:
+                for token in doc:
+                    if (not token.is_stop and not token.is_punct
+                            and token.is_alpha and len(token.text) > 3):
+                        entities.append({
+                            "text": token.text,
+                            "normalized_text": token.text.lower().strip(),
+                            "label": "KEYWORD",
+                            "start": token.idx,
+                            "end": token.idx + len(token.text)
+                        })
+
+            # Debug logging
+            self.logger.debug(f"Extracted entities: {entities}")
+            return entities
 
         except Exception as e:
-            self.logger.error(f"Error in entity extraction: {str(e)}")
+            self.logger.error(f"Entity extraction error: {str(e)}, stack: {traceback.format_exc()}")
             return []
 
     def add_document(self, doc_id: str, chunks: List[Document], metadata: Dict[str, Any]) -> None:
