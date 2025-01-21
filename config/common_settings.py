@@ -1,18 +1,22 @@
 import os
-from typing import Any, Dict, Union
 from functools import lru_cache
+from typing import Any, Dict, Union
 
 import dotenv
+import spacy
 import yaml
 from langchain_anthropic import ChatAnthropic, AnthropicLLM
-from langchain_community.chat_models import ChatSparkLLM
 from langchain_community.llms.sparkllm import SparkLLM
+from langchain_core.vectorstores import VectorStore
 from langchain_google_genai import GoogleGenerativeAI, ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM, ChatOllama
+from langchain_ollama import OllamaLLM
 from langchain_postgres import PGVector
-from FlagEmbedding import FlagReranker
 from langchain_qdrant import QdrantVectorStore
+from langchain_redis import RedisConfig, RedisVectorStore
+from neo4j import GraphDatabase
+from spacy import Language
+from spacy.vectors import Path
 
 from config.database.database_manager import DatabaseManager
 from utils.logger_init import logger
@@ -108,7 +112,6 @@ class CommonConfig:
             self.logger.error(f"Error initializing chat LLM: {str(e)}")
             raise
 
-
     def get_model(self, type):
         """Get model by type"""
         self.logger.info(f"Get model by type: {type}")
@@ -137,10 +140,16 @@ class CommonConfig:
             "trunk_size": self.config["app"]["embedding"].get("trunk_size", 1024),
             "overlap": self.config["app"]["embedding"].get("overlap", 100),
             "confluence": {
-                "url": self.config["app"]["embedding"].get("confluence", {}).get("url"),
+                "url": os.environ.get("CONFLUENCE_URL"),
                 "username": os.environ.get("CONFLUENCE_USER_NAME"),
                 "api_key": os.environ.get("CONFLUENCE_API_KEY"),
-            }
+            },
+            "vector_store": {
+                "enabled": self.config["app"]['embedding']["vector_store"].get("enabled", False),
+            },
+            "graph_store": {
+                "enabled": self.config["app"]['embedding']["graph_store"].get("enabled", False),
+            },
         }
 
         if key is None:
@@ -156,31 +165,48 @@ class CommonConfig:
         except (KeyError, TypeError):
             return default_value
 
-    def get_vector_store(self):
+    @lru_cache(maxsize=1)
+    def get_vector_store(self) -> VectorStore:
+        """Get vector store"""
         self.logger.info("Get vector store.")
-        # config = RedisConfig(
-        #     index_name="rag_docs",
-        #     redis_url=os.environ["REDIS_URL"],
-        #     distance_metric="COSINE",  # Options: COSINE, L2, IP
-        # )
-        # vector_store = RedisVectorStore(self.get_model("embedding"), config=config)
+        self.check_config(self.config, ["app", "embedding", "vector_store"], "app vector_store is not found.")
+        vector_store_type = self.config["app"]["embedding"]["vector_store"].get("type")
 
-        # vector_store = PGVector(
-        #     embeddings=self.get_model("embedding"),
-        #     collection_name="rag_docs",
-        #     connection=os.environ["POSTGRES_URI"],
-        #     use_jsonb=True,
-        # )
-        vector_store = QdrantVectorStore.from_documents(
-            documents=[],
-            embedding=self.get_model("embedding"),
-            collection_name="rag_docs",
-            url=os.environ["QDRANT_URL"],
-            api_key=os.environ["QDRANT_API_KEY"],
-        )
+        if vector_store_type == "qdrant":
+            return QdrantVectorStore.from_documents(
+                documents=[],
+                embedding=self.get_model("embedding"),
+                collection_name="rag_docs",
+                url=os.environ["QDRANT_URL"],
+                api_key=os.environ["QDRANT_API_KEY"],
+            )
 
-        return vector_store
+        elif vector_store_type == "redis":
+            config = RedisConfig(
+                index_name="rag_docs",
+                redis_url=os.environ["REDIS_URL"],
+                distance_metric="COSINE",  # Options: COSINE, L2, IP
+            )
+            return RedisVectorStore(self.get_model("embedding"), config=config)
 
+        elif vector_store_type == "pgvector":
+            return PGVector(
+                embeddings=self.get_model("embedding"),
+                collection_name="rag_docs",
+                connection=os.environ["POSTGRES_URI"],
+                use_jsonb=True,
+            )
+        else:
+            raise RuntimeError("Not found the vector store type")
+    def get_nlp_spacy(self) -> Language:
+        """Get NLP model"""
+        # Load spaCy model from local path
+        model_path = Path(os.path.join(BASE_DIR, "../models/spacy/en_core_web_md"))
+        if not model_path.exists():
+            raise RuntimeError(
+                "spaCy model not found. Please run scripts/download_spacy_model.py first"
+            )
+        return spacy.load(str(model_path))
     def setup_proxy(self):
         """Setup proxy configuration"""
         try:
@@ -229,7 +255,8 @@ class CommonConfig:
             self.logger.error(f"Failed to setup proxy: {str(e)}")
             raise ConfigError(f"Proxy setup failed: {str(e)}")
 
-    def get_db_manager(self):
+    @lru_cache(maxsize=1)
+    def get_db_manager(self) -> DatabaseManager:
         return DatabaseManager(os.environ["POSTGRES_URI"])
 
     @staticmethod
@@ -249,6 +276,7 @@ class CommonConfig:
             logger.error(f"An unexpected error occurred: {e}")
             return None
 
+    @lru_cache(maxsize=100)
     def get_logging_config(self, package_name: str = None) -> Union[Dict[str, str], str]:
         """
         Get logging configuration for packages with hierarchical path support.
@@ -283,6 +311,39 @@ class CommonConfig:
             self.logger.error(f"Error getting logging config: {str(e)}")
             return "INFO" if package_name else {"root": "INFO"}
 
+    @lru_cache(maxsize=1)
+    def get_graph_store(self) -> GraphDatabase:
+        """Get Neo4j graph store"""
+        try:
+            if not self.config["app"]["embedding"]["graph_store"].get("enabled", False):
+                self.logger.info("Graph store is disabled")
+                return None
+
+            uri = os.environ.get("NEO4J_URI")
+            username = os.environ.get("NEO4J_USERNAME")
+            password = os.environ.get("NEO4J_PASSWORD")
+
+            if not all([uri, username, password]):
+                self.logger.error("Missing Neo4j credentials in environment variables")
+                return None
+
+            driver = GraphDatabase.driver(uri, auth=(username, password))
+            
+            # Test the connection
+            try:
+                driver.verify_connectivity()
+                self.logger.info("Successfully connected to Neo4j")
+                return driver
+            except Exception as e:
+                self.logger.error(f"Failed to connect to Neo4j: {str(e)}")
+                if driver:
+                    driver.close()
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize graph store: {str(e)}")
+            return None
+
 
 class ConfigError(Exception):
     """Custom exception for configuration errors."""
@@ -295,7 +356,6 @@ if __name__ == "__main__":
     # llm = config.get_model("chatllm")
     # logger.info(llm.invoke("What is the capital of France?"))
 
-    web_search_enabled = config.get_query_config("search.web_search_enabled")
-    print(web_search_enabled)
+    print(config.get_embedding_config("graph_store.enabled"))
 
     print(config.get_logging_config("utils.lock"))

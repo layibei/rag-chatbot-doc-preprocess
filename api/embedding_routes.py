@@ -257,7 +257,7 @@ def delete_document(
         doc_processor = DocEmbeddingsProcessor(
             base_config.get_model("embedding"), 
             base_config.get_vector_store(),
-            IndexLogHelper(IndexLogRepository(base_config.get_db_manager()), base_config)
+            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), base_config
         )
         
         # 1. Check if document exists
@@ -269,11 +269,7 @@ def delete_document(
             )
             
         # 2. Remove embedded chunks from vector store
-        doc_processor._remove_existing_embeddings(
-            source=index_log.source,
-            source_type=index_log.source_type,
-            checksum=index_log.checksum
-        )
+        doc_processor.remove_existing_embeddings(index_log)
         
         # 3. Delete index log
         doc_processor.index_log_helper.delete_by_id(log_id)
@@ -285,6 +281,7 @@ def delete_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@DeprecationWarning
 @router.get("/docs/{log_id}/chunks", response_model=ChunkListResponse)
 def get_document_chunks(
     log_id: str,

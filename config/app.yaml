@@ -30,8 +30,14 @@ app:
     archive_path: "./data/archive"
     trunk_size: 2048
     overlap: 256
-    confluence:
-      url: https://akjamie.atlassian.net/
+    vector_store:
+      enabled: true
+      type: "qdrant"
+      # type: "redis"
+      # type: "pgvector"
+    graph_store:
+      enabled: true
+      type: "neo4j"
   proxy:
     enabled: true
     no_proxy: "localhost,127.0.0.1"
