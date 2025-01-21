@@ -201,6 +201,20 @@ async def upload_document(
             # Generate staging file path with sanitized filename
             safe_filename = sanitize_filename(file.filename)
             staging_file_path = os.path.join(staging_path, safe_filename)
+
+            # check if file already exists in staging
+            if os.path.exists(staging_file_path):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"File with the same name already exists in staging: {staging_file_path}"
+                )
+
+            # check if file already exists in archive
+            if os.path.exists(os.path.join(base_config.get_embedding_config()["archive_path"], safe_filename)):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"File with the same name already exists in archive: {os.path.join(base_config.get_embedding_config()['archive_path'], safe_filename)}"
+                )
             
             # Save file to staging using async read
             content = await file.read()
@@ -229,6 +243,13 @@ async def upload_document(
                 DocumentCategory.CONFLUENCE: SourceType.CONFLUENCE
             }
             source_type = category_to_source_type[category].value
+
+            # check if the source + source type has already existed in index log
+            if doc_processor.index_log_helper.find_by_source(source, source_type):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Document with source {source} and source type {source_type} already exists"
+                )
 
         # Process the document
         result = doc_processor.add_index_log(
