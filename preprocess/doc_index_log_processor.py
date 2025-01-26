@@ -35,7 +35,8 @@ class DocEmbeddingsProcessor:
         self.index_log_helper = index_log_helper
         self.config = config
         self.vector_store_helper = VectorStoreHelper(vector_store)
-        if self.config.get_embedding_config("graph_store.enabled", False):
+        self.graph_store_enabled = self.config.get_embedding_config("graph_store.enabled", False)
+        if self.graph_store_enabled:
             self.graph_store_helper = GraphStoreHelper(self.config.get_graph_store(), self.config)
 
     def add_index_log(self, source: str, source_type: str, user_id: str) -> dict:
@@ -194,4 +195,8 @@ class DocEmbeddingsProcessor:
         """Remove existing embeddings for a document"""
         self.logger.info(f"Removing existing embeddings for document with source: {index_log.source}, source_type: {index_log.source_type}, checksum: {index_log.checksum}")
         self.vector_store_helper.remove_existing_embeddings(index_log.source, index_log.source_type, index_log.checksum)
-        self.graph_store_helper.remove_document(index_log.id)
+        self.logger.info(f"Removed existing embeddings for document with source from vector database: {index_log.source}, source_type: {index_log.source_type}, checksum: {index_log.checksum}")
+
+        if self.graph_store_enabled:
+            self.graph_store_helper.remove_document(index_log.id)
+            self.logger.info(f"Removed existing embeddings for document from graph database: {index_log.id}")

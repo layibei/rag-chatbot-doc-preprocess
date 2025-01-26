@@ -57,7 +57,7 @@ class CommonConfig:
     def _get_llm_model(self, config):
         self.check_config(config, ["app", "models", "llm", "type"],
                           "LLM model is not found")
-        self.logger.info(f"LLM model: {self.config['app']['models']['llm']}")
+        self.logger.debug(f"LLM model: {self.config['app']['models']['llm']}")
 
         if self.config["app"]["models"]["llm"].get("type") == "sparkllm":
             return SparkLLM()
@@ -79,7 +79,7 @@ class CommonConfig:
     def _get_embedding_model(self, config):
         self.check_config(self.config, ["app", "models", "embedding", "type"],
                           "Embedding model is not found")
-        self.logger.info(f"Embedding model: {self.config['app']['models']['embedding']}")
+        self.logger.debug(f"Embedding model: {self.config['app']['models']['embedding']}")
 
         if self.config["app"]["models"]["embedding"].get("type") == "huggingface":
             return HuggingFaceEmbeddings(model_name=self.config["app"]["models"]["embedding"].get("model"))
@@ -114,7 +114,7 @@ class CommonConfig:
 
     def get_model(self, type):
         """Get model by type"""
-        self.logger.info(f"Get model by type: {type}")
+        self.logger.debug(f"Get model by type: {type}")
         if not isinstance(type, str):
             raise TypeError("Model type must be a string")
 
@@ -130,7 +130,7 @@ class CommonConfig:
             raise ValueError("Invalid model type")
 
     def get_embedding_config(self, key: str = None, default_value: Any = None) -> Any:
-        self.logger.info(f"Embedding config: {self.config['app']['embedding']}")
+        self.logger.debug(f"Embedding config: {self.config['app']['embedding']}")
         self.check_config(self.config, ["app", "embedding"], "app embedding is not found.")
         self.check_config(self.config, ["app", "embedding", "input_path"], "input path in app embedding is not found.")
         embedding_config = {
@@ -143,6 +143,7 @@ class CommonConfig:
                 "url": os.environ.get("CONFLUENCE_URL"),
                 "username": os.environ.get("CONFLUENCE_USER_NAME"),
                 "api_key": os.environ.get("CONFLUENCE_API_KEY"),
+                "token": os.environ.get("CONFLUENCE_TOKEN"),
             },
             "vector_store": {
                 "enabled": self.config["app"]['embedding']["vector_store"].get("enabled", False),
@@ -168,7 +169,7 @@ class CommonConfig:
     @lru_cache(maxsize=1)
     def get_vector_store(self) -> VectorStore:
         """Get vector store"""
-        self.logger.info("Get vector store.")
+        self.logger.debug("Get vector store.")
         self.check_config(self.config, ["app", "embedding", "vector_store"], "app vector_store is not found.")
         vector_store_type = self.config["app"]["embedding"]["vector_store"].get("type")
 

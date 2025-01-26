@@ -1,3 +1,4 @@
+import traceback
 from typing import List, Optional
 from langchain_community.document_loaders import ConfluenceLoader as LangChainConfluenceLoader
 from langchain_community.document_loaders.confluence import ContentFormat
@@ -30,20 +31,19 @@ class ConfluenceLoader(DocumentLoader):
                 raise ValueError(f"Could not extract page ID from URL: {url}")
             self.logger.info(f"Page ID: {page_id}, url:{url}")
 
-            # Get both VIEW and STORAGE formats for better content processing
+            # Get both VIEW and STORAGE formats
             view_docs = self._load_with_format(loader, page_id, ContentFormat.VIEW)
             storage_docs = self._load_with_format(loader, page_id, ContentFormat.STORAGE)
-
+            
             # Combine and enhance content
-            enhanced_docs = self._enhance_content(view_docs, storage_docs)
-            self.logger.info(
-                f"Enhanced content: {len(enhanced_docs)}, view doc count:{len(view_docs)}, storage doc count:{len(storage_docs)}")
-
-            # Split documents while preserving structure
-            splitter = self.get_splitter(enhanced_docs)
+            enhanced_docs = self._enhance_content(view_docs, storage_docs)  # Assuming single document
+            self.logger.info(f"Enhanced document size: {len(enhanced_docs)}")
+            
+            # Split document based on markdown content
+            splitter = self.get_splitter()
             split_docs = splitter.split_documents(enhanced_docs)
-
-            # Post-process split documents to maintain context
+            
+            # Post-process split documents
             return self._post_process_documents(split_docs, url)
 
         except Exception as e:
@@ -70,11 +70,11 @@ class ConfluenceLoader(DocumentLoader):
                     # Convert markdown to plain text for embedding
                     plain_text = self._extract_plain_text(view_doc.page_content)
                     enhanced_doc = Document(
-                        page_content=plain_text,  # Plain text for embedding
+                        page_content=view_doc.page_content,  # Plain text for embedding
                         metadata={
                             **view_doc.metadata,
                             "content_type": "markdown",
-                            "markdown_content": view_doc.page_content  # Store original markdown
+                            # "markdown_content": view_doc.page_content  # Store original markdown
                         }
                     )
                 else:
@@ -98,11 +98,11 @@ class ConfluenceLoader(DocumentLoader):
                     enhanced_content.extend(tables + code_blocks + diagrams + text_content)
 
                     enhanced_doc = Document(
-                        page_content=plain_text,  # Plain text for embedding
+                        page_content="\n\n".join(enhanced_content),  # Plain text for embedding
                         metadata={
                             **view_doc.metadata,
                             "content_type": "plain_text",
-                            "markdown_content": "\n\n".join(enhanced_content)  # Store formatted content
+                            # "markdown_content": "\n\n".join(enhanced_content)  # Store formatted content
                         }
                     )
 
@@ -252,13 +252,19 @@ class ConfluenceLoader(DocumentLoader):
         """Post-process split documents to maintain context and structure"""
         processed_docs = []
         for i, doc in enumerate(documents):
-            # Add position metadata
-            doc.metadata.update({
+            markdown = doc.page_content
+            plain_text = self._extract_plain_text(markdown)
+
+            new_doc = Document(page_content=plain_text, metadata={
+                **doc.metadata,
+                "content_type": "markdown",
+                "markdown_content": markdown,
                 "chunk_index": i,
                 "total_chunks": len(documents),
                 "source_url": url
             })
-            processed_docs.append(doc)
+
+            processed_docs.append(new_doc)
         self.logger.info(f"Post-processed {len(processed_docs)} documents")
         return processed_docs
 
@@ -267,16 +273,24 @@ class ConfluenceLoader(DocumentLoader):
         username = self.base_config.get_embedding_config("confluence.username")
         api_key = self.base_config.get_embedding_config("confluence.api_key")
 
+        # old confluence use PAT
+        token = self.base_config.get_embedding_config("confluence.token")
+        if token:
+            return LangChainConfluenceLoader(
+                url=confluence_url,
+                token=token,
+                keep_newlines=True
+            )
+
+
         return LangChainConfluenceLoader(
             url=confluence_url,
             username=username,
             api_key=api_key,
-            # content_format=ContentFormat.EXPORT_VIEW,
-            # keep_markdown_format=True,
             keep_newlines=True
         )
 
-    def get_splitter(self, documents: List[Document]) -> RecursiveCharacterTextSplitter:
+    def get_splitter(self) -> RecursiveCharacterTextSplitter:
         return RecursiveCharacterTextSplitter(
             chunk_size=self.get_trunk_size(),
             chunk_overlap=self.get_overlap()
@@ -321,6 +335,7 @@ class ConfluenceLoader(DocumentLoader):
                 confluence_url = self.base_config.get_embedding_config("confluence.url")
                 username = self.base_config.get_embedding_config("confluence.username")
                 api_key = self.base_config.get_embedding_config("confluence.api_key")
+                token = self.base_config.get_embedding_config("confluence.token")
 
                 # Use Confluence REST API to get page ID by title
                 api_url = f"{confluence_url}/rest/api/content"
@@ -329,9 +344,15 @@ class ConfluenceLoader(DocumentLoader):
                     "title": page_title,
                     "expand": "version"
                 }
-                headers = {
-                    "Authorization": f"Basic {b64encode(f'{username}:{api_key}'.encode()).decode()}"
-                }
+
+                if token:
+                    headers = {
+                        "Authorization": f"Bearer {token}"
+                    }
+                else:
+                    headers = {
+                        "Authorization": f"Basic {b64encode(f'{username}:{api_key}'.encode()).decode()}"
+                    }
 
                 response = requests.get(api_url, params=params, headers=headers)
                 if response.status_code == 200:
@@ -356,5 +377,6 @@ class ConfluenceLoader(DocumentLoader):
             return None
 
         except Exception as e:
-            self.logger.error(f"Failed to extract page ID from URL: {url}, Error: {str(e)}")
+            self.logger.error(f"Failed to extract page ID from URL: {url}, Error: {str(e)}, stack: {traceback.format_exc()}")
             raise ValueError(f"Invalid Confluence URL format: {url}")
+

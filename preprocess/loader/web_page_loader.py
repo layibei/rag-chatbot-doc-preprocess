@@ -20,7 +20,7 @@ class WebPageLoader(DocumentLoader):
                 self.logger.error(f"Loaded content is empty for URL: {url}")
                 raise ValueError(f"Loaded content is empty for URL: {url}")
 
-            splitter = self.get_splitter(documents)
+            splitter = self.get_splitter()
             if not splitter:
                 self.logger.error(f"Failed to create splitter for URL: {url}")
                 raise ValueError(f"Failed to create splitter for URL: {url}")
@@ -33,7 +33,7 @@ class WebPageLoader(DocumentLoader):
     def get_loader(self, url: str) -> BaseLoader:
         return WebBaseLoader(url)
 
-    def get_splitter(self, documents: List[Document]) -> RecursiveCharacterTextSplitter:
+    def get_splitter(self) -> RecursiveCharacterTextSplitter:
         return RecursiveCharacterTextSplitter(
             chunk_size=self.get_trunk_size(),
             chunk_overlap=self.get_overlap()

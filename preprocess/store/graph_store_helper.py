@@ -158,16 +158,7 @@ class GraphStoreHelper:
         """Add document and chunks to graph with optimized batch processing"""
         try:
             with self.driver.session() as session:
-                # Create indexes in separate statements
-                session.run("""
-                    CREATE INDEX doc_id IF NOT EXISTS FOR (d:Document) ON (d.doc_id)
-                """)
-
-                session.run("""
-                    CREATE INDEX doc_source IF NOT EXISTS FOR (d:Document) ON (d.source, d.source_type)
-                """)
-
-                # Create or update document node
+                # Create document node with doc_id as primary key
                 session.run("""
                     MERGE (d:Document {doc_id: $doc_id})
                     ON CREATE SET 
@@ -177,6 +168,9 @@ class GraphStoreHelper:
                         d.created_at = datetime(),
                         d += $additional_metadata
                     ON MATCH SET 
+                        d.source = $source,
+                        d.source_type = $source_type,
+                        d.checksum = $checksum,
                         d.last_updated = datetime(),
                         d += $additional_metadata
                 """, {
@@ -185,7 +179,7 @@ class GraphStoreHelper:
                     "source_type": metadata['source_type'],
                     "checksum": metadata['checksum'],
                     "additional_metadata": {k: v for k, v in metadata.items()
-                                            if k not in ['source', 'source_type', 'checksum']}
+                                         if k not in ['source', 'source_type', 'checksum']}
                 })
 
                 # Process chunks and entities
@@ -251,55 +245,81 @@ class GraphStoreHelper:
         """
         try:
             with self.driver.session() as session:
-                result = session.run("""
-                    // Match the document and related nodes
+                # First verify if document exists
+                verify_result = session.run("""
                     MATCH (d:Document {doc_id: $doc_id})
-                    OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
-                    OPTIONAL MATCH (c)-[m:MENTIONS]->(e:Entity)
+                    RETURN d.doc_id as doc_id, d.source as source, d.source_type as source_type
+                """, {"doc_id": doc_id})
+                
+                doc = verify_result.single()
+                if not doc:
+                    self.logger.warning(f"Document with doc_id {doc_id} not found in graph database")
+                    return False
+                    
+                self.logger.info(f"Found document to delete: {doc}")
 
+                # Proceed with deletion
+                result = session.run("""
+                    // Match the document by doc_id only
+                    MATCH (d:Document {doc_id: $doc_id})
+                    
+                    // Get related nodes
+                    OPTIONAL MATCH (d)-[r1:HAS_CHUNK]->(c:Chunk)
+                    OPTIONAL MATCH (c)-[r2:MENTIONS]->(e:Entity)
+                    
                     // Collect stats before deletion
-                    WITH d, c, m, e,
+                    WITH d, c, r1, r2, e,
                          count(DISTINCT d) as doc_count,
                          count(DISTINCT c) as chunk_count,
-                         count(DISTINCT m) as mention_count
-
-                    // Delete relationships and nodes
-                    DELETE m, c, d
-
+                         count(DISTINCT r2) as mention_count
+                    
+                    // Delete relationships first
+                    DELETE r1, r2
+                    
+                    // Then delete nodes
+                    WITH d, c, e, doc_count, chunk_count, mention_count
+                    DELETE c
+                    
+                    // Delete document
+                    WITH d, e, doc_count, chunk_count, mention_count
+                    DELETE d
+                    
                     // Handle orphaned entities
                     WITH e, doc_count, chunk_count, mention_count
                     WHERE e IS NOT NULL
                     AND NOT EXISTS((e)<-[:MENTIONS]-())
-
+                    
                     // Delete orphaned entities and return stats
                     WITH e, doc_count, chunk_count, mention_count,
                          count(e) as orphaned_count
                     DELETE e
-
-                    // Return all counts
+                    
                     RETURN doc_count as docs,
                            chunk_count as chunks,
                            mention_count as mentions,
                            orphaned_count as orphaned_entities
-                """, doc_id=doc_id)
+                """, {
+                    "doc_id": doc_id
+                })
 
                 stats = result.single()
-                if stats and stats["docs"] > 0:
+                if stats:
                     self.logger.info(
-                        f"Successfully removed document {doc_id}. "
-                        f"Deleted: {stats['docs']} documents, "
-                        f"{stats['chunks']} chunks, "
-                        f"{stats['mentions']} mentions, "
-                        f"{stats['orphaned_entities']} orphaned entities"
+                        f"Deletion stats for document {doc_id}:\n"
+                        f"- Documents: {stats['docs']}\n"
+                        f"- Chunks: {stats['chunks']}\n"
+                        f"- Mentions: {stats['mentions']}\n"
+                        f"- Orphaned entities: {stats['orphaned_entities']}"
                     )
-                    return True
+                    return stats["docs"] > 0
                 else:
-                    self.logger.warning(f"Document {doc_id} not found in graph database")
+                    self.logger.error(f"No stats returned after deletion attempt for document {doc_id}")
                     return False
 
         except Exception as e:
             self.logger.error(
-                f"Error removing document {doc_id} from graph store: {str(e)}, "
-                f"stack: {traceback.format_exc()}"
+                f"Error removing document {doc_id} from graph store:\n"
+                f"Error: {str(e)}\n"
+                f"Stack: {traceback.format_exc()}"
             )
             return False

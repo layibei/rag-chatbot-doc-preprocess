@@ -6,7 +6,7 @@ from preprocess.loader.base_loader import DocumentLoader
 
 
 class TextDocLoader(DocumentLoader):
-    def get_splitter(self, file_path):
+    def get_splitter(self):
         return RecursiveCharacterTextSplitter(chunk_size=self.get_trunk_size(), chunk_overlap=self.get_overlap())
 
     def get_loader(self, file_path: str) -> BaseLoader:
