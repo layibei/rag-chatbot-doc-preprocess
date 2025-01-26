@@ -1,15 +1,13 @@
-from contextlib import asynccontextmanager
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from langchain.globals import set_debug
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
 from api.embedding_routes import router as embedding_router
 from config.common_settings import CommonConfig
 from preprocess.doc_embedding_job import DocEmbeddingJob
-from utils.id_util import get_id
 from utils.logging_util import logger, set_context, clear_context
 
 # Global config instance
@@ -52,7 +50,7 @@ async def lifespan(app: FastAPI):
 
         # Initialize config and setup proxy first
         proxy_result = await base_config.asetup_proxy()
-        logger.info(f"Proxy setup {'enabled' if proxy_result else 'disabled'}")
+        logger.info(f"Proxy setup is {'enabled' if proxy_result else 'disabled'}")
 
         # Initialize other components (make this non-blocking)
         embedding_job = DocEmbeddingJob()

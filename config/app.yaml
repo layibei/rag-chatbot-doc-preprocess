@@ -44,7 +44,8 @@ app:
     http_proxy: "http://127.0.0.1:7890"
     https_proxy: "http://127.0.0.1:7890"
   logging.level:
-    root: "DEBUG"  # default for all packages including project and libraries
-    utils.lock: "WARNING"
-    langchain: "WARNING"
-    httpx: "WARNING"
+    root: "INFO"  # default for all packages including project and libraries
+    utils.lock: "WARN"
+    langchain: "WARN"
+    httpx: "WARN"
+    handler: "DEBUG"

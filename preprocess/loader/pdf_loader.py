@@ -11,7 +11,7 @@ class PDFDocLoader(DocumentLoader):
         if self.is_supported_file_extension(file_path):
             return PyMuPDFLoader(file_path)
 
-    def get_splitter(self, file_path: str) -> TextSplitter:
+    def get_splitter(self) -> TextSplitter:
         return RecursiveCharacterTextSplitter(chunk_size=self.get_trunk_size(), chunk_overlap=self.get_overlap())
 
     def is_supported_file_extension(self, file_path: str) -> bool:

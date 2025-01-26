@@ -5,9 +5,10 @@ import shutil
 import traceback
 from datetime import datetime, UTC, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from langchain_core.documents import Document
 
 from config.common_settings import CommonConfig
 from preprocess.index_log import Status, SourceType
@@ -16,6 +17,7 @@ from preprocess.index_log.repositories import IndexLogRepository
 from preprocess.loader.loader_factories import DocumentLoaderFactory
 from preprocess.store.graph_store_helper import GraphStoreHelper
 from preprocess.store.vector_store_helper import VectorStoreHelper
+from utils.id_util import get_id
 from utils.lock.distributed_lock_helper import DistributedLockHelper
 from utils.lock.repositories import DistributedLockRepository
 from utils.logging_util import logger
@@ -33,20 +35,18 @@ class DocEmbeddingJob:
         self.index_log_helper = None
         self.distributed_lock_helper = None
         self.scheduler = None
-        self.retriever = None
 
         self.embeddings = self.config.get_model("embedding")
         self.vector_store = self.config.get_vector_store()
         self.vector_store_helper = VectorStoreHelper(self.vector_store)
 
+        self.graph_store_enabled = self.config.get_embedding_config("graph_store.enabled", False)
+
         # Initialize graph store
-        if self.config.get_embedding_config("graph_store.enabled", False):
+        if self.graph_store_enabled:
             self.logger.info("Graph store is enabled")
             self.graph_store = self.config.get_graph_store()
             self.graph_store_helper = GraphStoreHelper(self.graph_store, self.config)
-        else:
-            # Use only vector store retriever
-            self.retriever = self.vector_store
 
         index_log_repo = IndexLogRepository(self.config.get_db_manager())
         self.index_log_helper = IndexLogHelper(index_log_repo)
@@ -303,25 +303,19 @@ class DocEmbeddingJob:
             "source_type": source_type
         }
 
-    def _calculate_checksum(self, source: str) -> str:
-        """Calculate checksum for a document"""
+    def add_documents_in_batches(self, documents: List[Document], batch_size: int = 10):
+        """Add documents to vector store in batches to prevent memory issues"""
         try:
-            with open(source, 'rb') as f:
-                return hashlib.sha256(f.read()).hexdigest()
+            total_batches = (len(documents) - 1) // batch_size + 1
+            for i in range(0, len(documents), batch_size):
+                batch = documents[i:i + batch_size]
+                current_batch = i // batch_size + 1
+                self.logger.info(f"Adding batch {current_batch} of {total_batches} to vector store")
+                self.vector_store.add_documents(batch)
+            self.logger.info(f"Successfully added all {len(documents)} documents in {total_batches} batches")
         except Exception as e:
-            self.logger.error(f"Error calculating checksum for {source}: {str(e)}")
+            self.logger.error(f"Error adding documents in batches: {str(e)}")
             raise
-
-    def _get_source_type(self, extension: str) -> Optional[str]:
-        """Map file extension to source type"""
-        extension_mapping = {
-            'pdf': 'pdf',
-            'txt': 'text',
-            'csv': 'csv',
-            'json': 'json',
-            'docx': 'docx'
-        }
-        return extension_mapping.get(extension.lower())
 
     def _process_document(self, log):
         """Process a single document"""
@@ -353,14 +347,15 @@ class DocEmbeddingJob:
                 doc.metadata.update({
                     "source": archive_file if archive_file is not None else log.source,
                     "source_type": log.source_type,
-                    "checksum": log.checksum
+                    "checksum": log.checksum,
+                    "trunk_id": get_id()
                 })
 
-            # Save to vector store
-            self.vector_store.add_documents(documents)
+            # Save to vector store in batches
+            self.add_documents_in_batches(documents)
 
             # Save to graph store if enabled and available
-            if self.graph_store and self.graph_store_helper:
+            if self.graph_store_enabled:
                 self.logger.info(f"Saving to graph store: {log.source_type}:{log.source}")
                 try:
                     self.graph_store_helper.add_document(
@@ -374,7 +369,7 @@ class DocEmbeddingJob:
                     )
                     self.logger.info(f"Successfully saved to graph store: {log.source_type}:{log.source}")
                 except Exception as e:
-                    self.logger.error(f"Error saving to graph store: {str(e)}")
+                    self.logger.error(f"Error saving to graph store: {str(e)}, stack:{traceback.format_exc()}")
                     # Don't fail the whole process if graph store fails
                     # Just log the error and continue
                     raise e
@@ -406,3 +401,14 @@ class DocEmbeddingJob:
             ))
             combined_content = json.dumps(all_docs, sort_keys=True)
             return hashlib.sha256(combined_content.encode()).hexdigest()
+
+    def _get_source_type(self, extension: str) -> Optional[str]:
+        """Map file extension to source type"""
+        extension_mapping = {
+            'pdf': 'pdf',
+            'txt': 'text',
+            'csv': 'csv',
+            'json': 'json',
+            'docx': 'docx'
+        }
+        return extension_mapping.get(extension.lower())

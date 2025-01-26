@@ -54,7 +54,7 @@ class DocumentLoader(ABC):
         pass
 
     @abstractmethod
-    def get_splitter(self, file_path: str) -> TextSplitter:
+    def get_splitter(self, file_path: str = None) -> TextSplitter:
         """
         Split the loaded document into chunks.
         """
