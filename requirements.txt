@@ -28,13 +28,13 @@ PyYAML~=6.0.2
 pytz~=2024.2
 xxhash~=3.5.0
 APScheduler==3.10.4
-requests==2.31.0
-python-multipart==0.0.7
+requests==2.32.2
+python-multipart==0.0.20
 pymupdf==1.23.8
 
 beautifulsoup4>=4.12.2
 atlassian-python-api>=3.41.2
-rank-bm25>=0.2.2
+rank_bm25>=0.2.2
 beautifulsoup4>=4.9.3
 lxml>=4.9.0
 markdownify>=0.11.6
