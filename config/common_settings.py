@@ -3,7 +3,6 @@ from functools import lru_cache
 from typing import Any, Dict, Union
 
 import dotenv
-import spacy
 import yaml
 
 from langchain_community.llms.sparkllm import SparkLLM
