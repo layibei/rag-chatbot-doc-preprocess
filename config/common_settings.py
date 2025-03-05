@@ -5,15 +5,9 @@ from typing import Any, Dict, Union
 import dotenv
 import spacy
 import yaml
-from langchain_anthropic import ChatAnthropic, AnthropicLLM
+
 from langchain_community.llms.sparkllm import SparkLLM
 from langchain_core.vectorstores import VectorStore
-from langchain_google_genai import GoogleGenerativeAI, ChatGoogleGenerativeAI
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM
-from langchain_postgres import PGVector
-from langchain_qdrant import QdrantVectorStore
-from langchain_redis import RedisConfig, RedisVectorStore
 from neo4j import GraphDatabase
 from spacy import Language
 from spacy.vectors import Path
@@ -54,7 +48,7 @@ class CommonConfig:
                 raise ConfigError(message)
             current = current[key]
 
-    def _get_llm_model(self, config):
+    def _get_llm_model(self):
         self.check_config(config, ["app", "models", "llm", "type"],
                           "LLM model is not found")
         self.logger.debug(f"LLM model: {self.config['app']['models']['llm']}")
@@ -64,29 +58,33 @@ class CommonConfig:
 
         if self.config["app"]["models"]["llm"].get("type") == "ollama" and self.config["app"]["models"]["llm"].get(
                 "model") is not None:
+            from langchain_ollama import OllamaLLM
             return OllamaLLM(model=self.config["app"]["models"]["llm"].get("model"), temperature=0.85)
 
         if self.config["app"]["models"]["llm"].get("type") == "gemini" and self.config["app"]["models"]["llm"].get(
                 "model") is not None:
+            from langchain_google_genai import GoogleGenerativeAI
             return GoogleGenerativeAI(model=self.config["app"]["models"]["llm"].get("model"), temperature=0.85)
 
         if self.config["app"]["models"]["llm"].get("type") == "anthropic" and self.config["app"]["models"][
             "llm"].get("model") is not None:
+            from langchain_anthropic import AnthropicLLM
             return AnthropicLLM(model=self.config["app"]["models"]["llm"].get("model"), temperature=0.85)
 
         raise RuntimeError("Not found the model type");
 
-    def _get_embedding_model(self, config):
+    def _get_embedding_model(self):
         self.check_config(self.config, ["app", "models", "embedding", "type"],
                           "Embedding model is not found")
         self.logger.debug(f"Embedding model: {self.config['app']['models']['embedding']}")
 
         if self.config["app"]["models"]["embedding"].get("type") == "huggingface":
+            from langchain_huggingface import HuggingFaceEmbeddings
             return HuggingFaceEmbeddings(model_name=self.config["app"]["models"]["embedding"].get("model"))
 
         raise RuntimeError("Not found the embedding model type");
 
-    def _get_chatllm_model(self, config):
+    def _get_chatllm_model(self):
         """Get chat LLM model with proxy configuration"""
         try:
             self.check_config(self.config, ["app", "models", "chatllm", "type"],
@@ -95,11 +93,13 @@ class CommonConfig:
             model_type = model_config.get("type")
 
             if model_type == "gemini":
+                from langchain_google_genai import ChatGoogleGenerativeAI
                 return ChatGoogleGenerativeAI(
                     model=model_config.get("model"),
                     temperature=0.85,
                 )
             elif model_type == "anthropic":
+                from langchain_anthropic import ChatAnthropic
                 return ChatAnthropic(
                     model=model_config.get("model"),
                     temperature=0.85,
@@ -119,12 +119,12 @@ class CommonConfig:
             raise TypeError("Model type must be a string")
 
         if type == "embedding":
-            return self._get_embedding_model(self.config);
+            return self._get_embedding_model()
         elif type == "llm":
-            return self._get_llm_model(self.config);
+            return self._get_llm_model()
 
         elif type == "chatllm":
-            return self._get_chatllm_model(self.config);
+            return self._get_chatllm_model()
 
         else:
             raise ValueError("Invalid model type")
@@ -174,6 +174,7 @@ class CommonConfig:
         vector_store_type = self.config["app"]["embedding"]["vector_store"].get("type")
 
         if vector_store_type == "qdrant":
+            from langchain_qdrant import QdrantVectorStore
             return QdrantVectorStore.from_documents(
                 documents=[],
                 embedding=self.get_model("embedding"),
@@ -183,6 +184,7 @@ class CommonConfig:
             )
 
         elif vector_store_type == "redis":
+            from langchain_redis import RedisConfig, RedisVectorStore
             config = RedisConfig(
                 index_name="rag_docs",
                 redis_url=os.environ["REDIS_URL"],
@@ -191,6 +193,7 @@ class CommonConfig:
             return RedisVectorStore(self.get_model("embedding"), config=config)
 
         elif vector_store_type == "pgvector":
+            from langchain_postgres import PGVector
             return PGVector(
                 embeddings=self.get_model("embedding"),
                 collection_name="rag_docs",
