@@ -1,5 +1,6 @@
 import traceback
 from enum import Enum
+import json
 
 import dotenv
 from fastapi import APIRouter, HTTPException, Query, Header, UploadFile, File, Form
@@ -51,6 +52,7 @@ class DocumentCategory(Enum):
     FILE = "file"
     WEB_PAGE = "web_page"
     CONFLUENCE = "confluence"
+    KNOWLEDGE_SNIPPET = "knowledge_snippet"
 
 
 class IndexLogResponse(BaseModel):
@@ -64,6 +66,11 @@ class IndexLogResponse(BaseModel):
     modified_at: datetime
     modified_by: str
     error_message: Optional[str]
+
+
+class TextContent(BaseModel):
+    content: str
+    title: Optional[str] = None
 
 
 @router.post("/docs", response_model=EmbeddingResponse)
@@ -168,16 +175,54 @@ async def upload_document(
     category: DocumentCategory = Form(...),
     file: Optional[UploadFile] = None,
     url: Optional[str] = Form(None),
+    content: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
     x_user_id: str = Header(...)
 ):
     try:
         doc_processor = DocEmbeddingsProcessor(
             base_config.get_model("embedding"),
             base_config.get_vector_store(),
-            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), base_config
+            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), 
+            base_config
         )
 
-        if category == DocumentCategory.FILE:
+        if category == DocumentCategory.KNOWLEDGE_SNIPPET:
+            if not content:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content is required for knowledge snippet"
+                )
+            
+            # Validate content length
+            if len(content) > 2000:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content must be less than 2000 characters"
+                )
+
+            # Create a JSON string as source
+            snippet_data = {
+                "content": content,
+                "title": title or "Untitled Snippet",
+                "created_at": datetime.now().isoformat()
+            }
+            source = json.dumps(snippet_data)
+            source_type = SourceType.KNOWLEDGE_SNIPPET.value
+
+            # Check if similar content exists to avoid duplicates
+            # We use content as a key part of checksum for knowledge snippets
+            import hashlib
+            content_checksum = hashlib.sha256(source.encode()).hexdigest()
+            
+            existing_snippets = doc_processor.index_log_helper.find_by_checksum(content_checksum)
+            if existing_snippets:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Similar content already exists in the knowledge base"
+                )
+
+        elif category == DocumentCategory.FILE:
             if not file:
                 raise HTTPException(
                     status_code=400,
@@ -262,8 +307,7 @@ async def upload_document(
         
     except Exception as e:
         logger.error(f"Error in upload_document: {str(e)}, stack_trace:{traceback.format_exc()}")
-        # Clean up staging file if there's an error
-        if 'staging_file_path' in locals() and os.path.exists(staging_file_path):
+        if category == DocumentCategory.FILE and 'staging_file_path' in locals() and os.path.exists(staging_file_path):
             os.remove(staging_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 

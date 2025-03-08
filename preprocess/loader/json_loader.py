@@ -26,7 +26,7 @@ class JsonDocLoader(DocumentLoader):
                 self.logger.error(f"Loaded document content is empty: {file_path}")
                 raise ValueError(f"Loaded document content is empty: {file_path}")
 
-            splitter = self.get_splitter(document)
+            splitter = self.get_splitter()
             if not splitter:
                 self.logger.error(f"Failed to create splitter for file: {file_path}")
                 raise ValueError(f"Failed to create splitter for file: {file_path}")
@@ -56,7 +56,7 @@ class JsonDocLoader(DocumentLoader):
     def get_loader(self, file_path: str) -> BaseLoader:
         pass
 
-    def get_splitter(self, file_path: str):
+    def get_splitter(self):
         return RecursiveJsonSplitter(max_chunk_size=self.get_trunk_size(),min_chunk_size=self.get_overlap())
 
     def is_supported_file_extension(self, file_path: str) -> bool:

@@ -11,6 +11,7 @@ from preprocess.loader.text_loader import TextDocLoader
 from preprocess.loader.web_page_loader import WebPageLoader
 from preprocess.loader.confluence_loader import ConfluenceLoader
 from preprocess.index_log import SourceType
+from preprocess.loader.knowledge_snippet_loader import KnowledgeSnippetLoader
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,8 @@ class DocumentLoaderFactory:
         SourceType.JSON: JsonDocLoader,
         SourceType.DOCX: DocxDocLoader,
         SourceType.WEB_PAGE: WebPageLoader,
-        SourceType.CONFLUENCE: ConfluenceLoader
+        SourceType.CONFLUENCE: ConfluenceLoader,
+        SourceType.KNOWLEDGE_SNIPPET: KnowledgeSnippetLoader
     }
 
     @staticmethod

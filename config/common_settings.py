@@ -3,6 +3,7 @@ from functools import lru_cache
 from typing import Any, Dict, Union
 
 import dotenv
+
 import yaml
 
 from langchain_community.llms.sparkllm import SparkLLM
@@ -203,6 +204,7 @@ class CommonConfig:
             raise RuntimeError("Not found the vector store type")
     def get_nlp_spacy(self) -> Language:
         """Get NLP model"""
+        import spacy
         # Load spaCy model from local path
         model_path = Path(os.path.join(BASE_DIR, "../models/spacy/en_core_web_md"))
         if not model_path.exists():

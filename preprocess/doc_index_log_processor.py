@@ -58,6 +58,22 @@ class DocEmbeddingsProcessor:
                 "source": source,
                 "source_type": source_type
             }
+        elif source_type == SourceType.KNOWLEDGE_SNIPPET.value:
+            import hashlib
+            checksum = hashlib.sha256(source.encode()).hexdigest()
+            new_log = self.index_log_helper.create(
+                source=source,
+                source_type=source_type,
+                checksum=checksum,
+                status=Status.PENDING,
+                user_id=user_id
+            )
+            return {
+                "message": "Document is queued for processing",
+                "id": new_log.id,
+                "source": source,
+                "source_type": source_type
+            }
         else:
 
             # Calculate checksum from source file
