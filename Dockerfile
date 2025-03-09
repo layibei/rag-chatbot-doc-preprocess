@@ -10,9 +10,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+#RUN apt-get update && apt-get install -y --no-install-recommends \
+#    build-essential \
+#    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
@@ -21,9 +21,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Download spaCy model and store it locally
-RUN python -m spacy download en_core_web_md && \
-    mkdir -p /app/models/spacy && \
-    cp -r /usr/local/lib/python3.12/site-packages/en_core_web_md /app/models/spacy/
+#RUN python -m spacy download en_core_web_md && \
+#    mkdir -p /app/models/spacy && \
+#    cp -r /usr/local/lib/python3.12/site-packages/en_core_web_md /app/models/spacy/
 
 # Copy application code
 COPY . .
