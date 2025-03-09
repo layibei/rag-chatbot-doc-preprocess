@@ -73,6 +73,14 @@ class TextContent(BaseModel):
     title: Optional[str] = None
 
 
+class PaginatedIndexLogResponse(BaseModel):
+    items: List[IndexLogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 @router.post("/docs", response_model=EmbeddingResponse)
 def add_document(
         request: EmbeddingRequest,
@@ -103,7 +111,7 @@ def get_document_by_id(log_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/docs", response_model=List[IndexLogResponse])
+@router.get("/docs", response_model=PaginatedIndexLogResponse)
 def list_documents(
     page: int = Query(1, gt=0),
     page_size: int = Query(10, gt=0),
@@ -118,7 +126,8 @@ def list_documents(
         doc_processor = DocEmbeddingsProcessor(
             base_config.get_model("embedding"), 
             base_config.get_vector_store(),
-            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), base_config
+            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), 
+            base_config
         )
         
         # Build filter conditions
@@ -135,14 +144,43 @@ def list_documents(
             filters['created_at_from'] = from_date
         if to_date:
             filters['created_at_to'] = to_date
+        
         logger.info(f"Search by filters: {filters}")
 
-        logs = doc_processor.index_log_helper.list_logs(
+        # Get paginated results with total count
+        logs, total = doc_processor.index_log_helper.list_logs_with_count(
             page=page,
             page_size=page_size,
             filters=filters
         )
-        return logs
+
+        # Convert IndexLog objects to dictionaries matching IndexLogResponse
+        log_responses = [
+            IndexLogResponse(
+                id=log.id,
+                source=log.source,
+                source_type=log.source_type,
+                status=log.status,
+                checksum=log.checksum,
+                created_at=log.created_at,
+                created_by=log.created_by,
+                modified_at=log.modified_at,
+                modified_by=log.modified_by,
+                error_message=log.error_message
+            ) for log in logs
+        ]
+
+        # Calculate total pages
+        total_pages = (total + page_size - 1) // page_size
+
+        return PaginatedIndexLogResponse(
+            items=log_responses,  # Use the converted responses
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages
+        )
+        
     except Exception as e:
         logger.error(f'Error:{traceback.format_exc()}')
         raise HTTPException(status_code=500, detail=str(e))
