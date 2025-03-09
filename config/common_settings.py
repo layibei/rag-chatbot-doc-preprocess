@@ -24,7 +24,13 @@ BASE_DIR = os.path.dirname(CURRENT_FILE_PATH)
 class CommonConfig:
     def __init__(self, config_path: str = None):
         self.logger = logger
-        dotenv.load_dotenv(dotenv_path=BASE_DIR + '/../.env')
+        dotenv_path = os.path.join(BASE_DIR, '..', '.env')
+        if os.path.exists(dotenv_path):
+            dotenv.load_dotenv(dotenv_path)
+        elif os.path.exists(os.getenv('DOTENV_PATH')):
+            dotenv.load_dotenv(dotenv_path=os.getenv('DOTENV_PATH'))
+        else:
+            self.logger.warning(f".env file not found at{dotenv_path}")
 
         if config_path:
             path = BASE_DIR + config_path
@@ -133,10 +139,14 @@ class CommonConfig:
         self.logger.debug(f"Embedding config: {self.config['app']['embedding']}")
         self.check_config(self.config, ["app", "embedding"], "app embedding is not found.")
         self.check_config(self.config, ["app", "embedding", "input_path"], "input path in app embedding is not found.")
+        input_path = os.getenv("DOC_INPUT_PATH", self.config["app"]["embedding"].get("input_path"))
+        staging_path = os.getenv("DOC_STAGING_PATH", self.config["app"]["embedding"].get("staging_path"))
+        archive_path = os.getenv("DOC_ARCHIVE_PATH", self.config["app"]["embedding"].get("archive_path"))
+
         embedding_config = {
-            "input_path": self.config["app"]["embedding"].get("input_path"),
-            "staging_path": self.config["app"]["embedding"].get("staging_path"),
-            "archive_path": self.config["app"]["embedding"].get("archive_path"),
+            "input_path": input_path,
+            "staging_path": staging_path,
+            "archive_path": archive_path,
             "trunk_size": self.config["app"]["embedding"].get("trunk_size", 1024),
             "overlap": self.config["app"]["embedding"].get("overlap", 100),
             "confluence": {
@@ -147,6 +157,7 @@ class CommonConfig:
             },
             "vector_store": {
                 "enabled": self.config["app"]['embedding']["vector_store"].get("enabled", False),
+                "collection_name": self.config["app"]['embedding']["vector_store"].get("collection_name", "rag_docs"),
             },
             "graph_store": {
                 "enabled": self.config["app"]['embedding']["graph_store"].get("enabled", False),
@@ -202,6 +213,7 @@ class CommonConfig:
             )
         else:
             raise RuntimeError("Not found the vector store type")
+
     def get_nlp_spacy(self) -> Language:
         """Get NLP model"""
         import spacy
@@ -212,6 +224,7 @@ class CommonConfig:
                 "spaCy model not found. Please run scripts/download_spacy_model.py first"
             )
         return spacy.load(str(model_path))
+
     def setup_proxy(self):
         """Setup proxy configuration"""
         try:
@@ -333,7 +346,7 @@ class CommonConfig:
                 return None
 
             driver = GraphDatabase.driver(uri, auth=(username, password))
-            
+
             # Test the connection
             try:
                 driver.verify_connectivity()

@@ -28,11 +28,6 @@ RUN python -m spacy download en_core_web_md && \
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p /app/data/input \
-    /app/data/staging \
-    /app/data/archive
-
 # Expose port
 EXPOSE 8001
 

@@ -33,6 +33,7 @@ app:
     vector_store:
       enabled: true
       type: "qdrant"
+      collection_name: "rag_docs"
       # type: "redis"
       # type: "pgvector"
     graph_store:
