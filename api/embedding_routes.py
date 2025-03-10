@@ -1,5 +1,6 @@
 import traceback
 from enum import Enum
+import json
 
 import dotenv
 from fastapi import APIRouter, HTTPException, Query, Header, UploadFile, File, Form
@@ -51,6 +52,7 @@ class DocumentCategory(Enum):
     FILE = "file"
     WEB_PAGE = "web_page"
     CONFLUENCE = "confluence"
+    KNOWLEDGE_SNIPPET = "knowledge_snippet"
 
 
 class IndexLogResponse(BaseModel):
@@ -64,6 +66,19 @@ class IndexLogResponse(BaseModel):
     modified_at: datetime
     modified_by: str
     error_message: Optional[str]
+
+
+class TextContent(BaseModel):
+    content: str
+    title: Optional[str] = None
+
+
+class PaginatedIndexLogResponse(BaseModel):
+    items: List[IndexLogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 @router.post("/docs", response_model=EmbeddingResponse)
@@ -96,7 +111,7 @@ def get_document_by_id(log_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/docs", response_model=List[IndexLogResponse])
+@router.get("/docs", response_model=PaginatedIndexLogResponse)
 def list_documents(
     page: int = Query(1, gt=0),
     page_size: int = Query(10, gt=0),
@@ -111,7 +126,8 @@ def list_documents(
         doc_processor = DocEmbeddingsProcessor(
             base_config.get_model("embedding"), 
             base_config.get_vector_store(),
-            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), base_config
+            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), 
+            base_config
         )
         
         # Build filter conditions
@@ -128,14 +144,43 @@ def list_documents(
             filters['created_at_from'] = from_date
         if to_date:
             filters['created_at_to'] = to_date
+        
         logger.info(f"Search by filters: {filters}")
 
-        logs = doc_processor.index_log_helper.list_logs(
+        # Get paginated results with total count
+        logs, total = doc_processor.index_log_helper.list_logs_with_count(
             page=page,
             page_size=page_size,
             filters=filters
         )
-        return logs
+
+        # Convert IndexLog objects to dictionaries matching IndexLogResponse
+        log_responses = [
+            IndexLogResponse(
+                id=log.id,
+                source=log.source,
+                source_type=log.source_type,
+                status=log.status,
+                checksum=log.checksum,
+                created_at=log.created_at,
+                created_by=log.created_by,
+                modified_at=log.modified_at,
+                modified_by=log.modified_by,
+                error_message=log.error_message
+            ) for log in logs
+        ]
+
+        # Calculate total pages
+        total_pages = (total + page_size - 1) // page_size
+
+        return PaginatedIndexLogResponse(
+            items=log_responses,  # Use the converted responses
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages
+        )
+        
     except Exception as e:
         logger.error(f'Error:{traceback.format_exc()}')
         raise HTTPException(status_code=500, detail=str(e))
@@ -168,16 +213,54 @@ async def upload_document(
     category: DocumentCategory = Form(...),
     file: Optional[UploadFile] = None,
     url: Optional[str] = Form(None),
+    content: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
     x_user_id: str = Header(...)
 ):
     try:
         doc_processor = DocEmbeddingsProcessor(
             base_config.get_model("embedding"),
             base_config.get_vector_store(),
-            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), base_config
+            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), 
+            base_config
         )
 
-        if category == DocumentCategory.FILE:
+        if category == DocumentCategory.KNOWLEDGE_SNIPPET:
+            if not content:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content is required for knowledge snippet"
+                )
+            
+            # Validate content length
+            if len(content) > 2000:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content must be less than 2000 characters"
+                )
+
+            # Create a JSON string as source
+            snippet_data = {
+                "content": content,
+                "title": title or "Untitled Snippet",
+                "created_at": datetime.now().isoformat()
+            }
+            source = json.dumps(snippet_data)
+            source_type = SourceType.KNOWLEDGE_SNIPPET.value
+
+            # Check if similar content exists to avoid duplicates
+            # We use content as a key part of checksum for knowledge snippets
+            import hashlib
+            content_checksum = hashlib.sha256(source.encode()).hexdigest()
+            
+            existing_snippets = doc_processor.index_log_helper.find_by_checksum(content_checksum)
+            if existing_snippets:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Similar content already exists in the knowledge base"
+                )
+
+        elif category == DocumentCategory.FILE:
             if not file:
                 raise HTTPException(
                     status_code=400,
@@ -262,8 +345,7 @@ async def upload_document(
         
     except Exception as e:
         logger.error(f"Error in upload_document: {str(e)}, stack_trace:{traceback.format_exc()}")
-        # Clean up staging file if there's an error
-        if 'staging_file_path' in locals() and os.path.exists(staging_file_path):
+        if category == DocumentCategory.FILE and 'staging_file_path' in locals() and os.path.exists(staging_file_path):
             os.remove(staging_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 

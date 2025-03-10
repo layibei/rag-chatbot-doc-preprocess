@@ -1,7 +1,7 @@
 from datetime import datetime, UTC, timedelta
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 from sqlalchemy.sql import select
 from sqlalchemy.exc import SQLAlchemyError, DatabaseError
 
@@ -122,10 +122,70 @@ class IndexLogRepository(BaseRepository[IndexLog]):
             error_message=db_obj.error_message
         )
 
+    def find_all_with_count(self, page: int = 1, page_size: int = 10, filters: dict = None) -> Tuple[List[IndexLog], int]:
+        """
+        Find all index logs with pagination, filtering and total count
+        
+        Returns:
+            Tuple of (list of index logs, total count)
+        """
+        with self.db_manager.session() as session:
+            try:
+                # Build base query
+                query = session.query(IndexLog)
+                count_query = session.query(func.count(IndexLog.id))
+
+                # Apply filters to both queries
+                if filters:
+                    if filters.get('source'):
+                        filter_condition = IndexLog.source.ilike(f'%{filters["source"]}%')
+                        query = query.filter(filter_condition)
+                        count_query = count_query.filter(filter_condition)
+                    if filters.get('source_type'):
+                        filter_condition = IndexLog.source_type == filters['source_type']
+                        query = query.filter(filter_condition)
+                        count_query = count_query.filter(filter_condition)
+                    if filters.get('status'):
+                        filter_condition = IndexLog.status == filters['status']
+                        query = query.filter(filter_condition)
+                        count_query = count_query.filter(filter_condition)
+                    if filters.get('created_by'):
+                        filter_condition = IndexLog.created_by.ilike(f'%{filters["created_by"]}%')
+                        query = query.filter(filter_condition)
+                        count_query = count_query.filter(filter_condition)
+                    if filters.get('created_at_from'):
+                        filter_condition = IndexLog.created_at >= filters['created_at_from']
+                        query = query.filter(filter_condition)
+                        count_query = count_query.filter(filter_condition)
+                    if filters.get('created_at_to'):
+                        filter_condition = IndexLog.created_at <= filters['created_at_to']
+                        query = query.filter(filter_condition)
+                        count_query = count_query.filter(filter_condition)
+
+                # Get total count
+                total = count_query.scalar()
+
+                # Apply pagination to main query
+                offset = (page - 1) * page_size
+                query = query.order_by(IndexLog.created_at.desc())
+                query = query.offset(offset).limit(page_size)
+                results = query.all()
+
+                return [self._create_detached_copy(result) for result in results], total
+
+            except SQLAlchemyError as e:
+                self.logger.error(f'Error in find_all_with_count: {str(e)}')
+                raise DatabaseError(f"Database error: {str(e)}")
+
+    def query(self):
+        """Create a new query object for the model class."""
+        with self.db_manager.session() as session:
+            return session.query(self.model_class)
+
     def find_all(self, page: int = 1, page_size: int = 10, filters: dict = None) -> List[IndexLog]:
         """
         Find all index logs with pagination and filtering support
-        
+
         Args:
             page: Page number (1-based)
             page_size: Number of items per page
@@ -167,7 +227,4 @@ class IndexLogRepository(BaseRepository[IndexLog]):
                 self.logger.error(f'Error while finding all index logs: {str(e)}')
                 raise DatabaseError(f"Database error: {str(e)}")
 
-    def query(self):
-        """Create a new query object for the model class."""
-        with self.db_manager.session() as session:
-            return session.query(self.model_class)
+

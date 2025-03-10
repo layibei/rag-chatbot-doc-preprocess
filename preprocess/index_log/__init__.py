@@ -6,17 +6,20 @@ from sqlalchemy.orm import declarative_base
 Base = declarative_base()
 
 
-class SourceType(str, PyEnum):
-    CSV = 'csv'
-    PDF = 'pdf'
+class SourceType(PyEnum):
+    PDF = "pdf"
     TEXT = 'text'
-    JSON = 'json'
-    DOCX = 'docx'
+    KNOWLEDGE_SNIPPET = "knowledge_snippet"
+    CSV = "csv"
+    JSON = "json"
+    DOCX = "docx"
     WEB_PAGE = "web_page"
     CONFLUENCE = "confluence"
 
     def is_file_based(self) -> bool:
-        return self in [SourceType.PDF, SourceType.CSV, SourceType.TEXT, SourceType.JSON, SourceType.DOCX]
+        is_file_upload = self.value not in [SourceType.WEB_PAGE.value, SourceType.CONFLUENCE.value,
+                              SourceType.KNOWLEDGE_SNIPPET.value]
+        return is_file_upload
 
 
 class Status(str, PyEnum):

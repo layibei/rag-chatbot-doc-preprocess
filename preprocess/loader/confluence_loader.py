@@ -1,16 +1,16 @@
+import re
 import traceback
-from typing import List, Optional
+from base64 import b64encode
+from typing import List
+from urllib.parse import urlparse, parse_qs
+
+import requests
+from bs4 import BeautifulSoup
 from langchain_community.document_loaders import ConfluenceLoader as LangChainConfluenceLoader
 from langchain_community.document_loaders.confluence import ContentFormat
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
-from urllib.parse import urlparse, parse_qs
-import requests
-from base64 import b64encode
-import re
-import json
-from bs4 import BeautifulSoup
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from markdownify import markdownify as md
 
 from preprocess.loader.base_loader import DocumentLoader

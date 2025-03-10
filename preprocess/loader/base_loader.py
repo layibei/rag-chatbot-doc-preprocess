@@ -36,7 +36,7 @@ class DocumentLoader(ABC):
                 self.logger.error(f"Loaded document content is empty: {file_path}")
                 raise ValueError(f"Loaded document content is empty: {file_path}")
 
-            splitter = self.get_splitter(document)
+            splitter = self.get_splitter()
             if not splitter:
                 self.logger.error(f"Failed to create splitter for file: {file_path}")
                 raise ValueError(f"Failed to create splitter for file: {file_path}")
@@ -54,7 +54,7 @@ class DocumentLoader(ABC):
         pass
 
     @abstractmethod
-    def get_splitter(self, file_path: str = None) -> TextSplitter:
+    def get_splitter(self) -> TextSplitter:
         """
         Split the loaded document into chunks.
         """

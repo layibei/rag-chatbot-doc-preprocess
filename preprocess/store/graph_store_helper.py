@@ -1,5 +1,6 @@
 import os
 import traceback
+import re
 from typing import List, Dict, Any
 
 from langchain_core.documents import Document
@@ -33,7 +34,6 @@ class GraphStoreHelper:
                 self.logger.warning(f"No entities extracted from query: {query}")
                 return []
 
-            # Debug logging for extracted entities
             self.logger.debug(f"Using entities for search: {entities}")
 
             with self.driver.session() as session:
@@ -45,7 +45,7 @@ class GraphStoreHelper:
                         entity.normalized_text CONTAINS e.normalized_name OR
                         e.name = entity.text)
 
-                    // Find connected chunks and documents
+                    // Find connected chunks and documents using doc_id as primary key
                     MATCH (e)<-[m:MENTIONS]-(c:Chunk)<-[:HAS_CHUNK]-(d:Document)
                     WHERE NOT EXISTS((d)<-[:REPLACES]-())
 
@@ -69,6 +69,7 @@ class GraphStoreHelper:
                     ORDER BY relevance_score DESC, match_count DESC
                     LIMIT $k
 
+                    // Return results with doc_id as primary identifier
                     RETURN 
                         c.content as content,
                         d.doc_id as doc_id,
@@ -88,7 +89,7 @@ class GraphStoreHelper:
                 documents = [Document(
                     page_content=record["content"],
                     metadata={
-                        "doc_id": record["doc_id"],
+                        "doc_id": record["doc_id"],  # Primary identifier
                         "source": record["source"],
                         "source_type": record["source_type"],
                         "graph_score": record["graph_score"],
@@ -97,7 +98,6 @@ class GraphStoreHelper:
                     }
                 ) for record in result]
 
-                # Debug logging for results
                 self.logger.debug(f"Found {len(documents)} documents through graph search")
                 return documents
 
@@ -105,54 +105,93 @@ class GraphStoreHelper:
             self.logger.error(f"Graph search error: {str(e)}, stack: {traceback.format_exc()}")
             return []
 
-    def _extract_entities(self, text: str) -> List[Dict]:
-        """Enhanced entity extraction with fallbacks"""
+    def _extract_entities(self, text: str) -> List[Dict[str, Any]]:
+        """Enhanced entity extraction optimized for RAG and graph storage"""
         try:
             entities = []
-            # Primary: Use spaCy for named entity recognition
             doc = self.nlp(text)
-
-            # Process named entities
+            
+            # 1. Named Entity Recognition with confidence scoring
             for ent in doc.ents:
+                # Filter out low-quality entities
+                if len(ent.text.strip()) < 2 or ent.text.strip().isnumeric():
+                    continue
+                    
                 entities.append({
                     "text": ent.text,
-                    "normalized_text": ent.text.lower().strip(),
+                    "normalized_text": self._normalize_entity(ent.text),
                     "label": ent.label_,
                     "start": ent.start_char,
-                    "end": ent.end_char
+                    "end": ent.end_char,
+                    "confidence": 1.0,  # Primary entities get highest confidence
+                    "type": "NER"
                 })
 
-            # Add noun phrases as entities
+            # 2. Key Phrase Extraction
             for np in doc.noun_chunks:
-                if len(np.text.split()) > 1:  # Only multi-word phrases
+                # Filter for meaningful phrases
+                if (len(np.text.split()) > 1 and  # Multi-word phrases
+                    not any(word.is_stop for word in np) and  # No stop words
+                    not np.text.strip().isnumeric()):  # Not just numbers
+                    
                     entities.append({
                         "text": np.text,
-                        "normalized_text": np.text.lower().strip(),
-                        "label": "NOUN_PHRASE",
+                        "normalized_text": self._normalize_entity(np.text),
+                        "label": "KEY_PHRASE",
                         "start": np.start_char,
-                        "end": np.end_char
+                        "end": np.end_char,
+                        "confidence": 0.8,  # Secondary confidence
+                        "type": "PHRASE"
                     })
 
-            # Fallback: Extract keywords if no entities found
-            if not entities:
-                for token in doc:
-                    if (not token.is_stop and not token.is_punct
-                            and token.is_alpha and len(token.text) > 3):
-                        entities.append({
-                            "text": token.text,
-                            "normalized_text": token.text.lower().strip(),
-                            "label": "KEYWORD",
-                            "start": token.idx,
-                            "end": token.idx + len(token.text)
-                        })
+            # 3. Domain-Specific Term Extraction
+            for token in doc:
+                if (token.pos_ in ['PROPN', 'NOUN'] and  # Focus on important POS
+                    not token.is_stop and 
+                    len(token.text) > 3):
+                    
+                    entities.append({
+                        "text": token.text,
+                        "normalized_text": self._normalize_entity(token.text),
+                        "label": "DOMAIN_TERM",
+                        "start": token.idx,
+                        "end": token.idx + len(token.text),
+                        "confidence": 0.6,  # Tertiary confidence
+                        "type": "TERM"
+                    })
 
-            # Debug logging
-            self.logger.debug(f"Extracted entities: {entities}")
-            return entities
+            # 4. Entity Deduplication and Merging
+            merged_entities = self._merge_entities(entities)
+            
+            self.logger.debug(f"Extracted {len(merged_entities)} unique entities")
+            return merged_entities
 
         except Exception as e:
             self.logger.error(f"Entity extraction error: {str(e)}, stack: {traceback.format_exc()}")
             return []
+
+    def _normalize_entity(self, text: str) -> str:
+        """Normalize entity text for better matching"""
+        # Remove special characters and extra whitespace
+        normalized = re.sub(r'[^\w\s]', ' ', text)
+        normalized = ' '.join(normalized.split())
+        return normalized.lower().strip()
+
+    def _merge_entities(self, entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge and deduplicate entities"""
+        merged = {}
+        
+        for entity in sorted(entities, key=lambda x: x['confidence'], reverse=True):
+            norm_text = entity['normalized_text']
+            
+            if norm_text not in merged:
+                merged[norm_text] = entity
+            else:
+                # Update existing entity if new one has higher confidence
+                if entity['confidence'] > merged[norm_text]['confidence']:
+                    merged[norm_text].update(entity)
+        
+        return list(merged.values())
 
     def add_document(self, doc_id: str, chunks: List[Document], metadata: Dict[str, Any]) -> None:
         """Add document and chunks to graph with optimized batch processing"""

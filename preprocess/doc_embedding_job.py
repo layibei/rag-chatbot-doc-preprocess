@@ -121,7 +121,8 @@ class DocEmbeddingJob:
                     # Process document
                     self._process_document(log)
 
-                    if SourceType(log.source_type).is_file_based():
+                    source_type = SourceType(log.source_type)
+                    if source_type.is_file_based():
                         # Move file to archive folder
                         archive_path = self.config.get_embedding_config()["archive_path"]
                         os.makedirs(archive_path, exist_ok=True)
@@ -332,9 +333,12 @@ class DocEmbeddingJob:
                 log.checksum = self._calculate_checksum_for_url(log, documents)
                 self.index_log_helper.save(log)
 
+            if log.source_type == SourceType.KNOWLEDGE_SNIPPET.value:
+                log.checksum = hashlib.sha256(log.source.encode()).hexdigest()
+                self.index_log_helper.save(log)
+
             # Initialize archive_file as None
             archive_file = None
-
             # calc archive path for file-based documents
             if not (log.source_type == SourceType.WEB_PAGE.value or log.source_type == SourceType.CONFLUENCE.value):
                 archive_path = self.config.get_embedding_config()["archive_path"]
@@ -401,6 +405,8 @@ class DocEmbeddingJob:
             ))
             combined_content = json.dumps(all_docs, sort_keys=True)
             return hashlib.sha256(combined_content.encode()).hexdigest()
+        else:
+            return None
 
     def _get_source_type(self, extension: str) -> Optional[str]:
         """Map file extension to source type"""
