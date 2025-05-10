@@ -6,7 +6,7 @@ from langchain_postgres import PGVector
 from pydantic import BaseModel
 
 from config.common_settings import CommonConfig
-from preprocess.index_log import Status, IndexLog, SourceType
+from preprocess.index_log import Status, IndexLog, SourceType, ProcessingType
 from preprocess.store.graph_store_helper import GraphStoreHelper
 from preprocess.store.vector_store_helper import VectorStoreHelper
 from utils.logging_util import logger
@@ -39,87 +39,76 @@ class DocEmbeddingsProcessor:
         if self.graph_store_enabled:
             self.graph_store_helper = GraphStoreHelper(self.config.get_graph_store(), self.config)
 
-    def add_index_log(self, source: str, source_type: str, user_id: str) -> dict:
+    def add_index_log(self, source: str, source_type: str, user_id: str, metadata: Optional[dict] = None) -> dict:
         """Add a new document to the index log or update existing one"""
-        self.logger.info(f"Adding document: {source}")
-
-        if source_type == SourceType.WEB_PAGE.value or source_type == SourceType.CONFLUENCE.value:
-            # Create new log
-            new_log = self.index_log_helper.create(
-                source=source,
-                source_type=source_type,
-                checksum="To be generated",
-                status=Status.PENDING,
-                user_id=user_id
-            )
-            return {
-                "message": "Document is queued for processing",
-                "id": new_log.id,
-                "source": source,
-                "source_type": source_type
-            }
-        elif source_type == SourceType.KNOWLEDGE_SNIPPET.value:
-            import hashlib
-            checksum = hashlib.sha256(source.encode()).hexdigest()
-            new_log = self.index_log_helper.create(
-                source=source,
-                source_type=source_type,
-                checksum=checksum,
-                status=Status.PENDING,
-                user_id=user_id
-            )
-            return {
-                "message": "Document is queued for processing",
-                "id": new_log.id,
-                "source": source,
-                "source_type": source_type
-            }
-        else:
-
-            # Calculate checksum from source file
+        try:
+            # 计算checksum
             checksum = self._calculate_checksum(source, source_type)
-
-            # First check by checksum
+            
+            # 检查是否已存在
             existing_log = self.index_log_helper.find_by_checksum(checksum)
             if existing_log:
+                processing_type = existing_log.processing_type or ProcessingType.STANDARD.value
                 return {
                     "message": "Document with same content already exists",
+                    "id": existing_log.id,
                     "source": existing_log.source,
                     "source_type": existing_log.source_type,
-                    "id": existing_log.id
+                    "processing_type": processing_type
                 }
-
-            # Then check by source path
+            
+            # 检查源路径
             existing_log = self.index_log_helper.find_by_source(source, source_type)
             if existing_log:
-                # Content changed, update existing log
+                # 内容已变更，更新现有日志
                 self.vector_store_helper.remove_existing_embeddings(source, source_type, existing_log.checksum)
                 existing_log.checksum = checksum
                 existing_log.status = Status.PENDING
                 existing_log.modified_at = datetime.now(UTC)
                 existing_log.modified_by = user_id
+                
+                # 如果提供了metadata，则更新processing_type
+                if metadata and 'processing_type' in metadata:
+                    existing_log.processing_type = metadata['processing_type']
+                    
                 self.index_log_helper.save(existing_log)
+                
+                processing_type = existing_log.processing_type or ProcessingType.STANDARD.value
                 return {
                     "message": "Document updated and queued for processing",
                     "id": existing_log.id,
                     "source": source,
-                    "source_type": source_type
+                    "source_type": source_type,
+                    "processing_type": processing_type
                 }
-
-            # Create new log
-            new_log = self.index_log_helper.create(
-                source=source,
-                source_type=source_type,
-                checksum=checksum,
-                status=Status.PENDING,
-                user_id=user_id
-            )
+            
+            # 创建日志数据
+            log_data = {
+                "source": source,
+                "source_type": source_type,
+                "checksum": checksum,
+                "status": Status.PENDING,
+                "user_id": user_id
+            }
+            
+            # 添加processing_type
+            if metadata and 'processing_type' in metadata:
+                log_data["processing_type"] = metadata['processing_type']
+                
+            # 创建新日志
+            new_log = self.index_log_helper.create(**log_data)
+            
+            processing_type = new_log.processing_type or ProcessingType.STANDARD.value
             return {
-                "message": "Document is queued for processing",
+                "message": "Document queued for processing",
                 "id": new_log.id,
                 "source": source,
-                "source_type": source_type
+                "source_type": source_type,
+                "processing_type": processing_type
             }
+        except Exception as e:
+            self.logger.error(f"Error adding index log: {str(e)}")
+            raise
 
     def _calculate_checksum(self, source: str, source_type: str) -> str:
         """Calculate checksum for a document"""
@@ -216,3 +205,85 @@ class DocEmbeddingsProcessor:
         if self.graph_store_enabled:
             self.graph_store_helper.remove_document(index_log.id)
             self.logger.info(f"Removed existing embeddings for document from graph database: {index_log.id}")
+
+    def add_hierarchical_index_log(self, source: str, source_type: str, user_id: str) -> dict:
+        """Add a new document to the index log using hierarchical processing"""
+        self.logger.info(f"Adding document for hierarchical processing: {source}")
+
+        # Check if we support hierarchical processing for this source type
+        if source_type == SourceType.CONFLUENCE.value:
+            # Create new log for Confluence page
+            new_log = self.index_log_helper.create(
+                source=source,
+                source_type=source_type,
+                checksum="To be generated",
+                status=Status.PENDING,
+                user_id=user_id,
+                processing_type=ProcessingType.HIERARCHICAL.value
+            )
+            return {
+                "message": "Document is queued for hierarchical processing",
+                "id": new_log.id,
+                "source": source,
+                "source_type": source_type,
+                "processing_type": ProcessingType.HIERARCHICAL.value
+            }
+        elif source_type == SourceType.DOCX.value:
+            try:
+                # Calculate checksum for file
+                checksum = self._calculate_checksum(source, source_type)
+                
+                # Check if already exists by checksum
+                existing_log = self.index_log_helper.find_by_checksum(checksum)
+                if existing_log:
+                    processing_type = existing_log.processing_type or ProcessingType.STANDARD.value
+                    return {
+                        "message": "Document with same content already exists",
+                        "id": existing_log.id,
+                        "source": existing_log.source,
+                        "source_type": existing_log.source_type,
+                        "processing_type": processing_type
+                    }
+                
+                # Check if already exists by source
+                existing_log = self.index_log_helper.find_by_source(source, source_type)
+                if existing_log:
+                    # Content changed, update existing log
+                    self.vector_store_helper.remove_existing_embeddings(source, source_type, existing_log.checksum)
+                    existing_log.checksum = checksum
+                    existing_log.status = Status.PENDING
+                    existing_log.modified_at = datetime.now(UTC)
+                    existing_log.modified_by = user_id
+                    existing_log.processing_type = ProcessingType.HIERARCHICAL.value
+                    self.index_log_helper.save(existing_log)
+                    return {
+                        "message": "Document updated and queued for hierarchical processing",
+                        "id": existing_log.id,
+                        "source": source,
+                        "source_type": source_type,
+                        "processing_type": ProcessingType.HIERARCHICAL.value
+                    }
+                
+                # Create new log for DOCX file
+                new_log = self.index_log_helper.create(
+                    source=source,
+                    source_type=source_type,
+                    checksum=checksum,
+                    status=Status.PENDING,
+                    user_id=user_id,
+                    processing_type=ProcessingType.HIERARCHICAL.value
+                )
+                return {
+                    "message": "Document is queued for hierarchical processing",
+                    "id": new_log.id,
+                    "source": source,
+                    "source_type": source_type,
+                    "processing_type": ProcessingType.HIERARCHICAL.value
+                }
+            except Exception as e:
+                self.logger.error(f"Error adding DOCX for hierarchical processing: {str(e)}")
+                raise
+        else:
+            # For non-supported document types, use regular processing for now
+            self.logger.warning(f"Hierarchical processing not supported for {source_type}, using standard processing instead")
+            return self.add_index_log(source, source_type, user_id)

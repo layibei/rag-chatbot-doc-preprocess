@@ -75,7 +75,7 @@ class IndexLogRepository(BaseRepository[IndexLog]):
 
         return result[0]
 
-    def create(self, source: str, source_type: str, checksum: str, status: Status, user_id: str) -> IndexLog:
+    def create(self, source: str, source_type: str, checksum: str, status: Status, user_id: str, processing_type: str = None) -> IndexLog:
         with self.db_manager.session() as session:
             try:
                 now = datetime.now(UTC)
@@ -88,7 +88,8 @@ class IndexLogRepository(BaseRepository[IndexLog]):
                     created_at=now,
                     created_by=user_id,
                     modified_at=now,
-                    modified_by=user_id
+                    modified_by=user_id,
+                    processing_type=processing_type
                 )
                 session.add(index_log)
                 session.flush()
@@ -104,7 +105,6 @@ class IndexLogRepository(BaseRepository[IndexLog]):
                         return self._create_detached_copy(existing)
                 raise
 
-
     def _create_detached_copy(self, db_obj: Optional[IndexLog]) -> Optional[IndexLog]:
         if not db_obj:
             return None
@@ -119,7 +119,9 @@ class IndexLogRepository(BaseRepository[IndexLog]):
             created_by=db_obj.created_by,
             modified_at=db_obj.modified_at,
             modified_by=db_obj.modified_by,
-            error_message=db_obj.error_message
+            error_message=db_obj.error_message,
+            retry_count=db_obj.retry_count,
+            processing_type=db_obj.processing_type
         )
 
     def find_all_with_count(self, page: int = 1, page_size: int = 10, filters: dict = None) -> Tuple[List[IndexLog], int]:

@@ -29,6 +29,11 @@ class Status(str, PyEnum):
     COMPLETED = 'COMPLETED'
 
 
+class ProcessingType(str, PyEnum):
+    STANDARD = 'standard'
+    HIERARCHICAL = 'hierarchical'
+
+
 class IndexLog(Base):
     __tablename__ = 'index_logs'
 
@@ -43,6 +48,7 @@ class IndexLog(Base):
     status = Column(String(128), nullable=False)
     error_message = Column(Text)
     retry_count = Column(Integer, nullable=False, default=0)
+    processing_type = Column(String(64), nullable=True)
 
     __table_args__ = (
         UniqueConstraint('source', 'source_type', name='uix_source_source_type'),

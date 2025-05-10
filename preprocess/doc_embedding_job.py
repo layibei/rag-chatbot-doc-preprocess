@@ -11,7 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from langchain_core.documents import Document
 
 from config.common_settings import CommonConfig
-from preprocess.index_log import Status, SourceType
+from preprocess.index_log import Status, SourceType, ProcessingType
 from preprocess.index_log.index_log_helper import IndexLogHelper
 from preprocess.index_log.repositories import IndexLogRepository
 from preprocess.loader.loader_factories import DocumentLoaderFactory
@@ -219,7 +219,8 @@ class DocEmbeddingJob:
                     self.add_index_log(
                         source=file_path,
                         source_type=source_type,
-                        user_id="system"  # System user for automated processing
+                        user_id="system",  # System user for automated processing
+                        metadata={}
                     )
                     self.logger.info(f"Added new document for processing: {file_name}")
 
@@ -267,7 +268,7 @@ class DocEmbeddingJob:
             self.logger.error(f"Error calculating checksum for {source}: {str(e)}")
             raise
 
-    def add_index_log(self, source: str, source_type: str, user_id: str) -> dict:
+    def add_index_log(self, source: str, source_type: str, user_id: str, metadata: Optional[dict] = None) -> dict:
         """Add a new document to the index log or update existing one"""
         # Calculate checksum from source file
         checksum = self._calculate_checksum(source)
@@ -281,6 +282,11 @@ class DocEmbeddingJob:
             existing_log.status = Status.PENDING
             existing_log.modified_at = datetime.now(UTC)
             existing_log.modified_by = user_id
+            
+            # Update processing_type if provided in metadata
+            if metadata and 'processing_type' in metadata:
+                existing_log.processing_type = metadata['processing_type']
+                
             self.index_log_helper.save(existing_log)
             return {
                 "message": "Document updated and queued for processing",
@@ -290,13 +296,20 @@ class DocEmbeddingJob:
             }
 
         # Create new log
-        new_log = self.index_log_helper.create(
-            source=source,
-            source_type=source_type,
-            checksum=checksum,
-            status=Status.PENDING,
-            user_id=user_id
-        )
+        log_data = {
+            "source": source,
+            "source_type": source_type,
+            "checksum": checksum,
+            "status": Status.PENDING,
+            "user_id": user_id
+        }
+        
+        # Add processing_type if provided in metadata
+        if metadata and 'processing_type' in metadata:
+            log_data["processing_type"] = metadata['processing_type']
+            
+        new_log = self.index_log_helper.create(**log_data)
+        
         return {
             "message": "Document queued for processing",
             "id": new_log.id,
@@ -322,11 +335,28 @@ class DocEmbeddingJob:
         """Process a single document"""
         try:
             self.logger.info(f"Processing document: {log.source_type}:{log.source}")
+            
+            # Check if this is a hierarchical processing request
+            is_hierarchical = log.processing_type == ProcessingType.HIERARCHICAL.value
+            
             # Get appropriate loader
             loader = DocumentLoaderFactory.get_loader(log.source_type)
 
-            # Load document
-            documents = loader.load(log.source)
+            # Load document - using hierarchical approach if supported and requested
+            if is_hierarchical:
+                if log.source_type == SourceType.CONFLUENCE.value:
+                    self.logger.info(f"Using hierarchical loading for Confluence: {log.source}")
+                    documents = loader.hierarchical_load(log.source)
+                elif log.source_type == SourceType.DOCX.value:
+                    self.logger.info(f"Using hierarchical loading for DOCX: {log.source}")
+                    documents = loader.hierarchical_load(log.source)
+                else:
+                    # Fallback to regular loading for unsupported types
+                    self.logger.info(f"Hierarchical loading not supported for {log.source_type}, using regular loading")
+                    documents = loader.load(log.source)
+            else:
+                # Use regular loading for non-hierarchical requests
+                documents = loader.load(log.source)
 
             # generate checksum if its source type is web_page or confluence
             if log.source_type == SourceType.WEB_PAGE.value or log.source_type == SourceType.CONFLUENCE.value:
@@ -352,8 +382,15 @@ class DocEmbeddingJob:
                     "source": archive_file if archive_file is not None else log.source,
                     "source_type": log.source_type,
                     "checksum": log.checksum,
-                    "trunk_id": get_id()
+                    "trunk_id": get_id(),
+                    "is_hierarchical": is_hierarchical
                 })
+
+            # Count parent/child documents if hierarchical
+            if is_hierarchical:
+                parent_count = sum(1 for doc in documents if doc.metadata.get("is_parent", False))
+                child_count = sum(1 for doc in documents if not doc.metadata.get("is_parent", True))
+                self.logger.info(f"Hierarchical processing: {parent_count} parent docs, {child_count} child docs")
 
             # Save to vector store in batches
             self.add_documents_in_batches(documents)
@@ -362,15 +399,50 @@ class DocEmbeddingJob:
             if self.graph_store_enabled:
                 self.logger.info(f"Saving to graph store: {log.source_type}:{log.source}")
                 try:
-                    self.graph_store_helper.add_document(
-                        doc_id=log.id,
-                        metadata={
-                            "source": archive_file if archive_file is not None else log.source,
-                            "source_type": log.source_type,
-                            "checksum": log.checksum
-                        },
-                        chunks=documents
-                    )
+                    if is_hierarchical:
+                        # Separate parent and child documents
+                        parent_docs = [doc for doc in documents if doc.metadata.get("is_parent", False)]
+                        child_docs = [doc for doc in documents if not doc.metadata.get("is_parent", True)]
+                        
+                        # Add with hierarchical structure if supported by graph store
+                        if hasattr(self.graph_store_helper, "add_hierarchical_document"):
+                            self.graph_store_helper.add_hierarchical_document(
+                                doc_id=log.id,
+                                metadata={
+                                    "source": archive_file if archive_file is not None else log.source,
+                                    "source_type": log.source_type,
+                                    "checksum": log.checksum,
+                                    "is_hierarchical": True,
+                                    "processing_type": log.processing_type
+                                },
+                                parent_chunks=parent_docs,
+                                child_chunks=child_docs
+                            )
+                        else:
+                            # Fallback to regular document adding
+                            self.graph_store_helper.add_document(
+                                doc_id=log.id,
+                                metadata={
+                                    "source": archive_file if archive_file is not None else log.source,
+                                    "source_type": log.source_type,
+                                    "checksum": log.checksum,
+                                    "is_hierarchical": True,
+                                    "processing_type": log.processing_type
+                                },
+                                chunks=documents
+                            )
+                    else:
+                        # Regular document processing
+                        self.graph_store_helper.add_document(
+                            doc_id=log.id,
+                            metadata={
+                                "source": archive_file if archive_file is not None else log.source,
+                                "source_type": log.source_type,
+                                "checksum": log.checksum,
+                                "processing_type": log.processing_type
+                            },
+                            chunks=documents
+                        )
                     self.logger.info(f"Successfully saved to graph store: {log.source_type}:{log.source}")
                 except Exception as e:
                     self.logger.error(f"Error saving to graph store: {str(e)}, stack:{traceback.format_exc()}")

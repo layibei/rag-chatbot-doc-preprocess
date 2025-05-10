@@ -15,6 +15,54 @@ class SourceType(str, PyEnum):
     CONFLUENCE = "confluence"
 ```
 
+# API Endpoints
+
+## Standard Document Processing API (v1)
+
+Use the following endpoint to upload and process documents:
+
+```
+POST /docs/upload
+```
+
+This endpoint supports all document types (PDF, DOCX, CSV, JSON, text, web pages, Confluence, and knowledge snippets).
+
+## Hierarchical Document Processing API (v2)
+
+The v2 API supports hierarchical document processing, which maintains parent-child relationships between document sections. This is particularly useful for preserving context and structure in complex documents.
+
+```
+POST /v2/docs/upload
+```
+
+Currently, the v2 API supports:
+- Confluence pages (via URL)
+- DOCX files (uploaded)
+
+### For uploading a DOCX file:
+```
+POST /v2/docs/upload
+Content-Type: multipart/form-data
+X-User-Id: your-user-id
+
+form-data:
+  - category: file
+  - file: [your DOCX file]
+```
+
+### For processing a Confluence page:
+```
+POST /v2/docs/upload
+Content-Type: multipart/form-data
+X-User-Id: your-user-id
+
+form-data:
+  - category: confluence
+  - url: [Confluence page URL]
+```
+
+The hierarchical processing creates parent documents (larger sections) and child documents (smaller chunks), maintaining relationships between them for improved context retention during retrieval.
+
 # add following keys to rag-chatbot/.env file - below are some sample key-values
 
 ![img.png](readme%2Fimg.png)

@@ -64,14 +64,15 @@ class IndexLogHelper:
             self.logger.error(f"Error finding index log by id {log_id}: {str(e)}")
             raise
 
-    def create(self, source: str, source_type: str, checksum: str, status: str, user_id: str) -> IndexLog:
+    def create(self, source: str, source_type: str, checksum: str, status: str, user_id: str, processing_type: str = None) -> IndexLog:
         try:
             return self.repository.create(
                 source=source,
                 source_type=source_type,
                 checksum=checksum,
                 status=status,
-                user_id=user_id
+                user_id=user_id,
+                processing_type=processing_type
             )
         except SQLAlchemyError as e:
             self.logger.error('Error while creating index log')

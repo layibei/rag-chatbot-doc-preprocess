@@ -5,11 +5,11 @@ import json
 import dotenv
 from fastapi import APIRouter, HTTPException, Query, Header, UploadFile, File, Form
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from config.common_settings import CommonConfig
-from preprocess.index_log import SourceType
+from preprocess.index_log import SourceType, ProcessingType
 from preprocess.doc_index_log_processor import DocEmbeddingsProcessor, DocumentChunk, ChunkListResponse
 import os
 from pathlib import Path
@@ -420,3 +420,146 @@ def get_document_chunks(
                 "error_code": "INTERNAL_SERVER_ERROR"
             }
         )
+
+@router.post("/v2/docs/upload", response_model=EmbeddingResponse)
+async def upload_hierarchical_document(
+    category: DocumentCategory = Form(...),
+    file: Optional[UploadFile] = None,
+    url: Optional[str] = Form(None),
+    content: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    x_user_id: str = Header(...)
+):
+    """
+    Upload and process documents with hierarchical structure (parent/child documents).
+    Currently supports:
+    - Confluence pages (via URL)
+    - DOCX files (uploaded)
+    
+    The documents will be processed with a hierarchical structure, which preserves
+    the parent-child relationship between document sections.
+    """
+    try:
+        doc_processor = DocEmbeddingsProcessor(
+            base_config.get_model("embedding"),
+            base_config.get_vector_store(),
+            IndexLogHelper(IndexLogRepository(base_config.get_db_manager())), 
+            base_config
+        )
+
+        # Handle Confluence documents
+        if category == DocumentCategory.CONFLUENCE:
+            if not url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="URL is required for Confluence documents"
+                )
+            
+            # Validate URL
+            if not URL_PATTERN.match(url):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid URL format. URL must start with http:// or https://"
+                )
+            
+            source = url
+            source_type = SourceType.CONFLUENCE.value
+            
+            # Check if document already exists in index log
+            existing_docs = doc_processor.index_log_helper.find_by_source(source, source_type)
+            if existing_docs:
+                # Document exists, return info about existing document
+                existing_doc = existing_docs[0]
+                return EmbeddingResponse(
+                    message=f"Document already exists. Use ID: {existing_doc.id}",
+                    source=existing_doc.source,
+                    source_type=existing_doc.source_type,
+                    id=existing_doc.id
+                )
+            
+            # Process document hierarchically
+            metadata = {
+                "processing_type": ProcessingType.HIERARCHICAL.value
+            }
+            
+        # Handle DOCX file uploads
+        elif category == DocumentCategory.FILE:
+            if not file:
+                raise HTTPException(
+                    status_code=400,
+                    detail="File is required when category is 'file'"
+                )
+                
+            # Infer source type from file extension
+            file_extension = Path(file.filename).suffix.lower()[1:]  # Remove the dot
+            source_type_enum = DocumentLoaderFactory.infer_source_type(file_extension)
+            
+            if not source_type_enum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: {file_extension}"
+                )
+                
+            # Verify it's a DOCX file - only DOCX is supported for hierarchical processing
+            if source_type_enum != SourceType.DOCX:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Only DOCX files are supported for hierarchical processing. Use the /docs/upload endpoint for other file types."
+                )
+                
+            # Create staging directory if it doesn't exist
+            staging_path = base_config.get_embedding_config()["staging_path"]
+            os.makedirs(staging_path, exist_ok=True)
+            
+            # Generate staging file path with sanitized filename
+            safe_filename = sanitize_filename(file.filename)
+            staging_file_path = os.path.join(staging_path, safe_filename)
+            
+            # Check if file already exists in staging
+            if os.path.exists(staging_file_path):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"File with the same name already exists in staging: {staging_file_path}"
+                )
+                
+            # Check if file already exists in archive
+            if os.path.exists(os.path.join(base_config.get_embedding_config()["archive_path"], safe_filename)):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"File with the same name already exists in archive: {os.path.join(base_config.get_embedding_config()['archive_path'], safe_filename)}"
+                )
+                
+            # Save file to staging using async read
+            content = await file.read()
+            with open(staging_file_path, "wb") as buffer:
+                buffer.write(content)
+                
+            source = staging_file_path
+            source_type = source_type_enum.value  # Convert enum to string
+            
+            # Set up metadata for hierarchical processing
+            metadata = {
+                "processing_type": ProcessingType.HIERARCHICAL.value
+            }
+            
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only Confluence and DOCX files are supported for hierarchical processing. Category '{category.value}' is not supported."
+            )
+            
+        # Process the document with hierarchical metadata
+        result = doc_processor.add_index_log(
+            source=source,
+            source_type=source_type,
+            user_id=x_user_id,
+            metadata=metadata
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in upload_hierarchical_document: {str(e)}, stack_trace:{traceback.format_exc()}")
+        if category == DocumentCategory.FILE and 'staging_file_path' in locals() and os.path.exists(staging_file_path):
+            os.remove(staging_file_path)
+        raise HTTPException(status_code=500, detail=str(e))
