@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -102,4 +102,17 @@ class IndexLogHelper:
             self.logger.info(f'Index log deleted for id {log_id}')
         except SQLAlchemyError as e:
             self.logger.error(f'Error while deleting index log for id {log_id}')
+            raise e
+
+    def list_logs_with_count(self, page: int, page_size: int, filters: dict = None) -> Tuple[List[IndexLog], int]:
+        """
+        List logs with pagination and total count
+        
+        Returns:
+            Tuple of (list of logs, total count)
+        """
+        try:
+            return self.repository.find_all_with_count(page, page_size, filters)
+        except SQLAlchemyError as e:
+            self.logger.error('Error while listing logs with count')
             raise e
