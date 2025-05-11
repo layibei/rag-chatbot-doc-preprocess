@@ -380,3 +380,97 @@ class ConfluenceLoader(DocumentLoader):
             self.logger.error(f"Failed to extract page ID from URL: {url}, Error: {str(e)}, stack: {traceback.format_exc()}")
             raise ValueError(f"Invalid Confluence URL format: {url}")
 
+    def hierarchical_load(self, url: str) -> List[Document]:
+        """
+        Load and process Confluence page with hierarchical structure (parent/child docs).
+        
+        This creates larger parent documents (preserving heading structure) and smaller
+        child documents for improved RAG retrieval with context maintenance.
+        """
+        try:
+            self.logger.info(f"Loading Confluence page with hierarchical approach: {url}")
+            # Get the loader
+            loader = self.get_loader(url)
+            if not loader:
+                raise ValueError(f"Failed to create loader for Confluence URL: {url}")
+                
+            # Extract page ID and get content
+            page_id = self._extract_page_id(url)
+            if not page_id:
+                raise ValueError(f"Could not extract page ID from URL: {url}")
+            self.logger.info(f"Page ID: {page_id}, url:{url}")
+            
+            # Get both VIEW and STORAGE formats
+            view_docs = self._load_with_format(loader, page_id, ContentFormat.VIEW)
+            storage_docs = self._load_with_format(loader, page_id, ContentFormat.STORAGE)
+            
+            # Combine and enhance content
+            enhanced_docs = self._enhance_content(view_docs, storage_docs)
+            self.logger.info(f"Enhanced document size: {len(enhanced_docs)}")
+            
+            # Get parent and child splitters based on config
+            parent_chunk_size = self.base_config.get_embedding_config("hierarchical.parent_chunk_size", 4096)
+            parent_overlap = self.base_config.get_embedding_config("hierarchical.child_overlap", 200)
+            child_chunk_size = self.base_config.get_embedding_config("hierarchical.child_chunk_size", 1024)
+            child_overlap = self.base_config.get_embedding_config("hierarchical.child_overlap", 200)
+            
+            self.logger.info(f"Using hierarchical splitters: parent={parent_chunk_size}/{parent_overlap}, "
+                             f"child={child_chunk_size}/{child_overlap}")
+            
+            # Create all documents with hierarchical structure
+            all_docs = []
+            
+            # Create parent splitter
+            parent_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=parent_chunk_size,
+                chunk_overlap=parent_overlap
+            )
+            
+            # Create child splitter
+            child_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=child_chunk_size,
+                chunk_overlap=child_overlap
+            )
+            
+            # First create parent documents
+            parent_docs = parent_splitter.split_documents(enhanced_docs)
+            self.logger.info(f"Created {len(parent_docs)} parent documents")
+            
+            # For each parent document, create child documents
+            for i, parent_doc in enumerate(parent_docs):
+                # Add parent document with metadata
+                parent_id = f"parent_{i}"
+                parent_doc.metadata.update({
+                    "doc_type": "parent",
+                    "doc_level": "parent",
+                    "parent_id": parent_id,
+                    "is_parent": True,
+                    "page_number": i,
+                    "total_pages": len(parent_docs),
+                    "source_url": url
+                })
+                all_docs.append(parent_doc)
+                
+                # Create child documents from parent
+                child_docs = child_splitter.split_documents([parent_doc])
+                
+                self.logger.info(f"Created {len(child_docs)} child documents for parent {i}")
+                
+                for j, child_doc in enumerate(child_docs):
+                    child_doc.metadata.update({
+                        "doc_type": "child",
+                        "doc_level": "child",
+                        "parent_id": parent_id,
+                        "child_id": f"child_{i}_{j}",
+                        "is_parent": False,
+                        "child_index": j,
+                        "source_url": url
+                    })
+                    all_docs.append(child_doc)
+            
+            self.logger.info(f"Total documents created: {len(all_docs)}")
+            return all_docs
+        except Exception as e:
+            self.logger.error(f"Failed to load Confluence page hierarchically: {url}, Error: {str(e)}")
+            raise
+

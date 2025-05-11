@@ -149,6 +149,21 @@ class CommonConfig:
             "archive_path": archive_path,
             "trunk_size": self.config["app"]["embedding"].get("trunk_size", 1024),
             "overlap": self.config["app"]["embedding"].get("overlap", 100),
+            "hierarchical": {
+                "parent_chunk_size": self.config["app"]["embedding"].get("hierarchical", {}).get("parent_chunk_size", 4096),
+                "child_chunk_size": self.config["app"]["embedding"].get("hierarchical", {}).get("child_chunk_size", 1024),
+                "child_overlap": self.config["app"]["embedding"].get("hierarchical", {}).get("child_overlap", 200),
+                "enabled_for": self.config["app"]["embedding"].get("hierarchical", {}).get("enabled_for", {
+                    "docx": True,
+                    "confluence": True,
+                    "web_page": False,
+                    "pdf": False,
+                    "text": False,
+                    "csv": False,
+                    "json": False,
+                    "knowledge_snippet": False
+                })
+            },
             "confluence": {
                 "url": os.environ.get("CONFLUENCE_URL"),
                 "username": os.environ.get("CONFLUENCE_USER_NAME"),

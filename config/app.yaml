@@ -30,6 +30,19 @@ app:
     archive_path: "./data/archive"
     trunk_size: 2048
     overlap: 256
+    hierarchical:
+      parent_chunk_size: 4096
+      child_chunk_size: 1024
+      child_overlap: 200
+      enabled_for:
+        docx: true
+        confluence: true
+        web_page: false
+        pdf: false
+        text: false
+        csv: false
+        json: false
+        knowledge_snippet: false
     vector_store:
       enabled: true
       type: "qdrant"

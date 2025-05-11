@@ -269,9 +269,9 @@ async def upload_document(
 
             # Infer source type from file extension
             file_extension = Path(file.filename).suffix.lower()[1:]  # Remove the dot
-            source_type = DocumentLoaderFactory.infer_source_type(file_extension)
+            source_type_enum = DocumentLoaderFactory.infer_source_type(file_extension)
             
-            if not source_type:
+            if not source_type_enum:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unsupported file type: {file_extension}"
@@ -305,7 +305,7 @@ async def upload_document(
                 buffer.write(content)
 
             source = staging_file_path
-            source_type = source_type.value  # Convert enum to string
+            source_type = source_type_enum.value  # Convert enum to string
 
         else:  # WEB_PAGE or CONFLUENCE
             if not url:
@@ -325,7 +325,8 @@ async def upload_document(
                 DocumentCategory.WEB_PAGE: SourceType.WEB_PAGE,
                 DocumentCategory.CONFLUENCE: SourceType.CONFLUENCE
             }
-            source_type = category_to_source_type[category].value
+            source_type_enum = category_to_source_type[category]
+            source_type = source_type_enum.value
 
             # check if the source + source type has already existed in index log
             if doc_processor.index_log_helper.find_by_source(source, source_type):
@@ -334,11 +335,25 @@ async def upload_document(
                     detail=f"Document with source {source} and source type {source_type} already exists"
                 )
 
-        # Process the document
+        # Check if hierarchical processing is enabled for this source type
+        hierarchical_enabled = base_config.get_embedding_config().get("hierarchical", {}).get("enabled_for", {}).get(source_type.lower(), False)
+        
+        # Set processing type based on configuration
+        metadata = None
+        if hierarchical_enabled:
+            metadata = {
+                "processing_type": ProcessingType.HIERARCHICAL.value
+            }
+            logger.info(f"Using hierarchical processing for {source_type}")
+        else:
+            logger.info(f"Using standard processing for {source_type}")
+        
+        # Process the document with appropriate metadata
         result = doc_processor.add_index_log(
             source=source,
             source_type=source_type,
-            user_id=x_user_id
+            user_id=x_user_id,
+            metadata=metadata
         )
         
         return result
@@ -421,7 +436,7 @@ def get_document_chunks(
             }
         )
 
-@router.post("/v2/docs/upload", response_model=EmbeddingResponse)
+@router.post("/v2/docs/upload", response_model=EmbeddingResponse, deprecated=True)
 async def upload_hierarchical_document(
     category: DocumentCategory = Form(...),
     file: Optional[UploadFile] = None,
@@ -438,6 +453,9 @@ async def upload_hierarchical_document(
     
     The documents will be processed with a hierarchical structure, which preserves
     the parent-child relationship between document sections.
+    
+    DEPRECATED: Please use the regular /docs/upload endpoint, which now automatically 
+    determines whether to use hierarchical processing based on configuration settings.
     """
     try:
         doc_processor = DocEmbeddingsProcessor(
