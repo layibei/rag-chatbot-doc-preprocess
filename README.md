@@ -17,7 +17,7 @@ class SourceType(str, PyEnum):
 
 # API Endpoints
 
-## Standard Document Processing API (v1)
+## Document Processing API
 
 Use the following endpoint to upload and process documents:
 
@@ -27,21 +27,41 @@ POST /docs/upload
 
 This endpoint supports all document types (PDF, DOCX, CSV, JSON, text, web pages, Confluence, and knowledge snippets).
 
-## Hierarchical Document Processing API (v2)
+### Hierarchical Document Processing
 
-The v2 API supports hierarchical document processing, which maintains parent-child relationships between document sections. This is particularly useful for preserving context and structure in complex documents.
-
-```
-POST /v2/docs/upload
-```
-
-Currently, the v2 API supports:
+The system now automatically determines when to use hierarchical document processing based on configuration settings in `config/app.yaml`. By default, hierarchical processing is enabled for:
 - Confluence pages (via URL)
 - DOCX files (uploaded)
 
-### For uploading a DOCX file:
+Hierarchical processing creates parent documents (larger sections) and child documents (smaller chunks), maintaining relationships between them for improved context retention during retrieval.
+
+### Configuration
+
+You can configure which document types use hierarchical processing and the chunk sizes in `config/app.yaml`:
+
+```yaml
+app:
+  embedding:
+    hierarchical:
+      parent_chunk_size: 4096    # Size of parent chunks
+      child_chunk_size: 1024     # Size of child chunks
+      child_overlap: 200         # Overlap between child chunks
+      enabled_for:               # Enable/disable hierarchical processing per file type
+        docx: true
+        confluence: true
+        web_page: false
+        pdf: false
+        text: false
+        csv: false
+        json: false
+        knowledge_snippet: false
 ```
-POST /v2/docs/upload
+
+### Examples
+
+#### For uploading a DOCX file with automatic hierarchical processing:
+```
+POST /docs/upload
 Content-Type: multipart/form-data
 X-User-Id: your-user-id
 
@@ -50,9 +70,9 @@ form-data:
   - file: [your DOCX file]
 ```
 
-### For processing a Confluence page:
+#### For processing a Confluence page with automatic hierarchical processing:
 ```
-POST /v2/docs/upload
+POST /docs/upload
 Content-Type: multipart/form-data
 X-User-Id: your-user-id
 
@@ -61,7 +81,15 @@ form-data:
   - url: [Confluence page URL]
 ```
 
-The hierarchical processing creates parent documents (larger sections) and child documents (smaller chunks), maintaining relationships between them for improved context retention during retrieval.
+## Legacy API (Deprecated)
+
+The following endpoint is kept for backward compatibility but is deprecated:
+
+```
+POST /v2/docs/upload
+```
+
+Please use the standard `/docs/upload` endpoint instead, which now automatically determines whether to use hierarchical processing.
 
 # add following keys to rag-chatbot/.env file - below are some sample key-values
 
