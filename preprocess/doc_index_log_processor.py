@@ -42,10 +42,8 @@ class DocEmbeddingsProcessor:
     def add_index_log(self, source: str, source_type: str, user_id: str, metadata: Optional[dict] = None) -> dict:
         """Add a new document to the index log or update existing one"""
         try:
-            # 计算checksum
             checksum = self._calculate_checksum(source, source_type)
             
-            # 检查是否已存在
             existing_log = self.index_log_helper.find_by_checksum(checksum)
             if existing_log:
                 processing_type = existing_log.processing_type or ProcessingType.STANDARD.value
@@ -57,17 +55,14 @@ class DocEmbeddingsProcessor:
                     "processing_type": processing_type
                 }
             
-            # 检查源路径
             existing_log = self.index_log_helper.find_by_source(source, source_type)
             if existing_log:
-                # 内容已变更，更新现有日志
                 self.vector_store_helper.remove_existing_embeddings(source, source_type, existing_log.checksum)
                 existing_log.checksum = checksum
                 existing_log.status = Status.PENDING
                 existing_log.modified_at = datetime.now(UTC)
                 existing_log.modified_by = user_id
                 
-                # 如果提供了metadata，则更新processing_type
                 if metadata and 'processing_type' in metadata:
                     existing_log.processing_type = metadata['processing_type']
                     
@@ -82,7 +77,6 @@ class DocEmbeddingsProcessor:
                     "processing_type": processing_type
                 }
             
-            # 创建日志数据
             log_data = {
                 "source": source,
                 "source_type": source_type,
@@ -91,11 +85,9 @@ class DocEmbeddingsProcessor:
                 "user_id": user_id
             }
             
-            # 添加processing_type
             if metadata and 'processing_type' in metadata:
                 log_data["processing_type"] = metadata['processing_type']
                 
-            # 创建新日志
             new_log = self.index_log_helper.create(**log_data)
             
             processing_type = new_log.processing_type or ProcessingType.STANDARD.value
@@ -115,12 +107,15 @@ class DocEmbeddingsProcessor:
         try:
             if source_type == SourceType.WEB_PAGE.value or source_type == SourceType.CONFLUENCE.value:
                 return "To be generated"
+            
+            if source_type == SourceType.KNOWLEDGE_SNIPPET.value:
+                self.logger.info(f"Calculating checksum for knowledge snippet")
+                return hashlib.sha256(source.encode()).hexdigest()
 
             self.logger.info(f"Calculating checksum for file: {source}")
             with open(source, 'rb') as f:
                 return hashlib.sha256(f.read()).hexdigest()
         except Exception as e:
-            self.logger.error(f"Error calculating checksum for {source}: {str(e)}")
             raise
 
     def get_document_by_id(self, log_id) -> IndexLog:
@@ -209,31 +204,23 @@ class DocEmbeddingsProcessor:
     def add_hierarchical_index_log(self, source: str, source_type: str, user_id: str) -> dict:
         """Add a new document to the index log using hierarchical processing"""
         self.logger.info(f"Adding document for hierarchical processing: {source}")
-
-        # Check if we support hierarchical processing for this source type
-        if source_type == SourceType.CONFLUENCE.value:
-            # Create new log for Confluence page
-            new_log = self.index_log_helper.create(
-                source=source,
-                source_type=source_type,
-                checksum="To be generated",
-                status=Status.PENDING,
-                user_id=user_id,
-                processing_type=ProcessingType.HIERARCHICAL.value
-            )
-            return {
-                "message": "Document is queued for hierarchical processing",
-                "id": new_log.id,
-                "source": source,
-                "source_type": source_type,
-                "processing_type": ProcessingType.HIERARCHICAL.value
-            }
-        elif source_type == SourceType.DOCX.value:
+        
+        
+        source_type_key = source_type.lower()
+        hierarchical_enabled = self.config.get_embedding_config(f"hierarchical.enabled_for.{source_type_key}", False)
+        
+        if not hierarchical_enabled:
+            self.logger.warning(f"Hierarchical processing not enabled for {source_type}, using standard processing instead")
+            return self.add_index_log(source, source_type, user_id)
+        
+        
+        is_file_based = source_type not in [SourceType.CONFLUENCE.value, SourceType.WEB_PAGE.value, 
+                                         SourceType.KNOWLEDGE_SNIPPET.value]
+        
+        if is_file_based:
             try:
-                # Calculate checksum for file
                 checksum = self._calculate_checksum(source, source_type)
                 
-                # Check if already exists by checksum
                 existing_log = self.index_log_helper.find_by_checksum(checksum)
                 if existing_log:
                     processing_type = existing_log.processing_type or ProcessingType.STANDARD.value
@@ -245,10 +232,10 @@ class DocEmbeddingsProcessor:
                         "processing_type": processing_type
                     }
                 
-                # Check if already exists by source
+                
                 existing_log = self.index_log_helper.find_by_source(source, source_type)
                 if existing_log:
-                    # Content changed, update existing log
+                    
                     self.vector_store_helper.remove_existing_embeddings(source, source_type, existing_log.checksum)
                     existing_log.checksum = checksum
                     existing_log.status = Status.PENDING
@@ -264,7 +251,7 @@ class DocEmbeddingsProcessor:
                         "processing_type": ProcessingType.HIERARCHICAL.value
                     }
                 
-                # Create new log for DOCX file
+                
                 new_log = self.index_log_helper.create(
                     source=source,
                     source_type=source_type,
@@ -281,9 +268,23 @@ class DocEmbeddingsProcessor:
                     "processing_type": ProcessingType.HIERARCHICAL.value
                 }
             except Exception as e:
-                self.logger.error(f"Error adding DOCX for hierarchical processing: {str(e)}")
+                self.logger.error(f"Error adding file for hierarchical processing: {str(e)}")
                 raise
         else:
-            # For non-supported document types, use regular processing for now
-            self.logger.warning(f"Hierarchical processing not supported for {source_type}, using standard processing instead")
-            return self.add_index_log(source, source_type, user_id)
+            # Web pages, Confluence, Knowledge snippets
+            checksum = "To be generated" if source_type != SourceType.KNOWLEDGE_SNIPPET.value else hashlib.sha256(source.encode()).hexdigest()
+            new_log = self.index_log_helper.create(
+                source=source,
+                source_type=source_type,
+                checksum=checksum,
+                status=Status.PENDING,
+                user_id=user_id,
+                processing_type=ProcessingType.HIERARCHICAL.value
+            )
+            return {
+                "message": "Document is queued for hierarchical processing",
+                "id": new_log.id,
+                "source": source,
+                "source_type": source_type,
+                "processing_type": ProcessingType.HIERARCHICAL.value
+            }

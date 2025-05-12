@@ -40,6 +40,74 @@ class JsonDocLoader(DocumentLoader):
             self.logger.error(f"Failed to load document: {file_path}, Error: {str(e)}")
             raise
 
+    def hierarchical_load(self, file_path: str) -> List[Document]:
+        """Load and process JSON file with hierarchical structure (parent/child docs)"""
+        try:
+            self.logger.info(f"Loading JSON with hierarchical approach: {file_path}")
+            
+            # Load JSON data
+            with open(file_path, 'r') as file:
+                document = json.load(file)
+
+            if not document:
+                self.logger.error(f"Loaded document content is empty: {file_path}")
+                raise ValueError(f"Loaded document content is empty: {file_path}")
+                
+            # Get parent and child splitters
+            parent_splitter, child_splitter = self.get_hierarchical_splitters()
+            
+            # Create parent documents
+            parent_json_chunks = parent_splitter.split_json(document)
+            metadata = self.create_metadata(file_path)
+            parent_metadatas = [metadata for _ in range(len(parent_json_chunks))]
+            parent_docs = parent_splitter.create_documents(parent_json_chunks, metadatas=parent_metadatas)
+            
+            # Create all documents with hierarchical structure
+            all_docs = []
+            
+            # For each parent document, create child documents
+            for i, parent_doc in enumerate(parent_docs):
+                # Add parent document with metadata
+                parent_id = f"parent_{i}"
+                parent_doc.metadata.update({
+                    "doc_type": "parent",
+                    "doc_level": "parent",
+                    "parent_id": parent_id,
+                    "is_parent": True,
+                    "page_number": i,
+                    "total_pages": len(parent_docs)
+                })
+                all_docs.append(parent_doc)
+                
+                # Create child documents from parent content
+                # For JSON, we'll use the text splitter for the stringified content
+                # This is a simplification - ideally we'd have a better way to split JSON hierarchically
+                parent_content = parent_doc.page_content
+                child_texts = child_splitter.split_text(parent_content)
+                
+                self.logger.info(f"Created {len(child_texts)} child documents for parent {i}")
+                
+                for j, child_text in enumerate(child_texts):
+                    child_doc = Document(
+                        page_content=child_text,
+                        metadata={
+                            **parent_doc.metadata.copy(),
+                            "doc_type": "child",
+                            "doc_level": "child",
+                            "parent_id": parent_id,
+                            "child_id": f"child_{i}_{j}",
+                            "is_parent": False,
+                            "child_index": j
+                        }
+                    )
+                    all_docs.append(child_doc)
+            
+            self.logger.info(f"Total documents created: {len(all_docs)}")
+            return all_docs
+        except Exception as e:
+            self.logger.error(f"Failed to load JSON file hierarchically: {file_path}, Error: {str(e)}")
+            raise
+
     def create_metadata(self, file_path):
         creation_time = os.path.getctime(file_path)
         modification_time = os.path.getmtime(file_path)
