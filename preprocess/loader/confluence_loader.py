@@ -16,7 +16,10 @@ from markdownify import markdownify as md
 from preprocess.loader.base_loader import DocumentLoader
 
 
-class ConfluenceLoader(DocumentLoader):
+class ConfluenceLoader(BaseLoader):
+    # Borrow the hierarchical splitters method directly from DocumentLoader class
+    get_hierarchical_splitters = DocumentLoader.get_hierarchical_splitters
+    
     def load(self, url: str) -> List[Document]:
         """Load and process Confluence page with enhanced content preservation"""
         try:
@@ -36,7 +39,7 @@ class ConfluenceLoader(DocumentLoader):
             storage_docs = self._load_with_format(loader, page_id, ContentFormat.STORAGE)
             
             # Combine and enhance content
-            enhanced_docs = self._enhance_content(view_docs, storage_docs)  # Assuming single document
+            enhanced_docs = self._enhance_content(view_docs, storage_docs)
             self.logger.info(f"Enhanced document size: {len(enhanced_docs)}")
             
             # Split document based on markdown content
@@ -269,11 +272,16 @@ class ConfluenceLoader(DocumentLoader):
         return processed_docs
 
     def get_loader(self, url: str) -> BaseLoader:
+        """Get Confluence loader"""
         confluence_url = self.base_config.get_embedding_config("confluence.url")
+        if not confluence_url:
+            self.logger.error("Confluence URL not configured")
+            raise ValueError("Confluence URL not configured")
+            
         username = self.base_config.get_embedding_config("confluence.username")
         api_key = self.base_config.get_embedding_config("confluence.api_key")
 
-        # old confluence use PAT
+        # Old confluence use PAT
         token = self.base_config.get_embedding_config("confluence.token")
         if token:
             return LangChainConfluenceLoader(
@@ -281,7 +289,6 @@ class ConfluenceLoader(DocumentLoader):
                 token=token,
                 keep_newlines=True
             )
-
 
         return LangChainConfluenceLoader(
             url=confluence_url,
@@ -297,7 +304,7 @@ class ConfluenceLoader(DocumentLoader):
         )
 
     def is_supported_file_extension(self, file_path: str) -> bool:
-        # Confluence pages don't have file extensions to check
+        """Confluence pages don't have file extensions to check"""
         return True
 
     def _extract_page_id(self, url: str) -> str:
@@ -381,12 +388,7 @@ class ConfluenceLoader(DocumentLoader):
             raise ValueError(f"Invalid Confluence URL format: {url}")
 
     def hierarchical_load(self, url: str) -> List[Document]:
-        """
-        Load and process Confluence page with hierarchical structure (parent/child docs).
-        
-        This creates larger parent documents (preserving heading structure) and smaller
-        child documents for improved RAG retrieval with context maintenance.
-        """
+        """Load and process Confluence page with hierarchical structure (parent/child docs)"""
         try:
             self.logger.info(f"Loading Confluence page with hierarchical approach: {url}")
             # Get the loader
@@ -452,6 +454,7 @@ class ConfluenceLoader(DocumentLoader):
             
             self.logger.info(f"Total documents created: {len(all_docs)}")
             return all_docs
+            
         except Exception as e:
             self.logger.error(f"Failed to load Confluence page hierarchically: {url}, Error: {str(e)}")
             raise
