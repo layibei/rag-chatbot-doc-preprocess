@@ -408,29 +408,11 @@ class ConfluenceLoader(DocumentLoader):
             enhanced_docs = self._enhance_content(view_docs, storage_docs)
             self.logger.info(f"Enhanced document size: {len(enhanced_docs)}")
             
-            # Get parent and child splitters based on config
-            parent_chunk_size = self.base_config.get_embedding_config("hierarchical.parent_chunk_size", 4096)
-            parent_overlap = self.base_config.get_embedding_config("hierarchical.child_overlap", 200)
-            child_chunk_size = self.base_config.get_embedding_config("hierarchical.child_chunk_size", 1024)
-            child_overlap = self.base_config.get_embedding_config("hierarchical.child_overlap", 200)
-            
-            self.logger.info(f"Using hierarchical splitters: parent={parent_chunk_size}/{parent_overlap}, "
-                             f"child={child_chunk_size}/{child_overlap}")
+            # Get parent and child splitters
+            parent_splitter, child_splitter = self.get_hierarchical_splitters()
             
             # Create all documents with hierarchical structure
             all_docs = []
-            
-            # Create parent splitter
-            parent_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=parent_chunk_size,
-                chunk_overlap=parent_overlap
-            )
-            
-            # Create child splitter
-            child_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=child_chunk_size,
-                chunk_overlap=child_overlap
-            )
             
             # First create parent documents
             parent_docs = parent_splitter.split_documents(enhanced_docs)

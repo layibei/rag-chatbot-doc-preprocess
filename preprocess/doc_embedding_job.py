@@ -344,15 +344,14 @@ class DocEmbeddingJob:
 
             # Load document - using hierarchical approach if supported and requested
             if is_hierarchical:
-                if log.source_type == SourceType.CONFLUENCE.value:
-                    self.logger.info(f"Using hierarchical loading for Confluence: {log.source}")
-                    documents = loader.hierarchical_load(log.source)
-                elif log.source_type == SourceType.DOCX.value:
-                    self.logger.info(f"Using hierarchical loading for DOCX: {log.source}")
+                source_type_key = log.source_type.lower()  
+                hierarchical_enabled = self.config.get_embedding_config(f"hierarchical.enabled_for.{source_type_key}", False)
+                
+                if hierarchical_enabled:
+                    self.logger.info(f"Using hierarchical loading for {log.source_type}: {log.source}")
                     documents = loader.hierarchical_load(log.source)
                 else:
-                    # Fallback to regular loading for unsupported types
-                    self.logger.info(f"Hierarchical loading not supported for {log.source_type}, using regular loading")
+                    self.logger.info(f"Hierarchical processing not enabled for {log.source_type}, using regular loading")
                     documents = loader.load(log.source)
             else:
                 # Use regular loading for non-hierarchical requests
