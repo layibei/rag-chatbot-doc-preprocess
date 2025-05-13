@@ -455,4 +455,3 @@ class ConfluenceLoader(DocumentLoader):
         except Exception as e:
             self.logger.error(f"Failed to load Confluence page hierarchically: {url}, Error: {str(e)}")
             raise
-
